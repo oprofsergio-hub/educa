@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EducaFlow Pro - Sistema Completo de Gestão Escolar</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-analytics-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- Integração de IA: TensorFlow.js e modelo de toxicidade -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/toxicity@1.2.2/dist/toxicity.min.js"></script>
+    <!-- Biblioteca para captura de screenshots de elementos (exportação de heatmap) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+</head>
+<body>
+    <!-- Splash Screen -->
+    <div id="splash" class="splash">
+        <div class="splash__content">
+            <div class="splash__logo">
+                <h1>EducaFlow Pro</h1>
+                <p>Sistema Completo</p>
+            </div>
+            <div class="splash__loading">
+                <div class="spinner"></div>
+                <p id="loadingStatus">Inicializando sistema...</p>
+            </div>
+            <!-- A lista de verificações do sistema fica visível por padrão para
+                 permitir que a lógica de inicialização atualize os ícones e
+                 mensagens. -->
+            <div id="systemChecks" class="system-checks">
+                <div class="check-item" id="check-firebase">
+                    <span class="check-status">⏳</span> Firebase Database
+                </div>
+                <div class="check-item" id="check-auth">
+                    <span class="check-status">⏳</span> Autenticação Google
+                </div>
+                <div class="check-item" id="check-connection">
+                    <span class="check-status">⏳</span> Conectividade
+                </div>
+                <div class="check-item" id="check-domains">
+                    <span class="check-status">⏳</span> Domínios Autorizados
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login Screen -->
+    <div id="login" class="login hidden">
+        <div class="login__container">
+            <div class="login__header">
+                <div class="logo-container">
+                    <!-- O src será preenchido dinamicamente pelo JavaScript para garantir que o logotipo sempre carregue. -->
+                    <!-- A imagem do logotipo será definida via JavaScript usando
+                         dados Base64 para evitar problemas de carregamento de
+                         arquivos estáticos em diferentes domínios. -->
+                    <img class="logo-img" alt="Logo EducaFlow Pro">
+                    <div class="logo-text">
+                        <h1>EducaFlow Pro</h1>
+                        <p class="tagline">Transformando a disciplina em excelência</p>
+                    </div>
+                </div>
+                <p>Sistema Completo de Gestão Escolar</p>
+                <span class="version">v2.0</span>
+            </div>
+            <div class="login__content">
+                <h2>Faça login para continuar</h2>
+                <p>Acesse o sistema com sua conta Google</p>
+                <button id="googleLoginBtn" class="btn btn--primary btn--google" disabled>
+                    <svg width="18" height="18" viewBox="0 0 18 18">
+                        <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
+                        <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2.04a4.8 4.8 0 0 1-2.7.75c-2.087 0-3.85-1.41-4.48-3.31H1.96v2.06A8 8 0 0 0 8.98 17z"/>
+                        <path fill="#FBBC05" d="M4.5 10.75a4.8 4.8 0 0 1 0-3.5V5.19H1.96a8 8 0 0 0 0 7.12l2.54-1.56z"/>
+                        <path fill="#EA4335" d="M8.98 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 8.98 0A8 8 0 0 0 1.96 5.19L4.5 7.25c.63-1.9 2.393-3.32 4.48-3.32z"/>
+                    </svg>
+                    Entrar com Google
+                </button>
+                <!-- Removido botão de Modo Demo para utilizar somente o modo online -->
+                <div id="loginError" class="login__error hidden">
+                    <p>Erro ao fazer login. Tente novamente.</p>
+                </div>
+                <div id="loginLoading" class="login__loading hidden">
+                    <div class="spinner small"></div>
+                    <p>Fazendo login...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="dashboard" class="dashboard hidden">
+        <!-- Header -->
+        <header class="dashboard__header">
+            <div class="header__left">
+                <div class="logo-container">
+                     <!-- O src será preenchido dinamicamente pelo JavaScript -->
+                     <img class="logo-img" alt="Logo EducaFlow Pro">
+                    <div class="logo-text">
+                        <h1>EducaFlow Pro</h1>
+                        <p class="tagline">Transformando a disciplina em excelência</p>
+                    </div>
+                </div>
+                <span class="version">v2.0</span>
+                <div id="demoIndicator" class="demo-indicator hidden">
+                    <span>🎭 MODO DEMO</span>
+                </div>
+            </div>
+            <div class="header__right">
+                <div class="user-info">
+                    <img id="userPhoto" class="user-photo" src="" alt="Foto de usuário">
+                    <span id="userName"></span>
+                </div>
+                <button id="logoutBtn" class="btn btn--outline btn--sm">Sair</button>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="dashboard__nav">
+            <button class="nav-btn active" data-tab="overview">📊 Dashboard</button>
+            <button class="nav-btn" data-tab="students">👥 Alunos</button>
+            <button class="nav-btn" data-tab="classes">🏫 Turmas</button>
+            <button class="nav-btn" data-tab="infractions">⚖️ Infrações</button>
+            <button class="nav-btn" data-tab="filters">🔍 Filtros</button>
+            <!-- Removed separate Statistics button; the dashboard now includes statistics -->
+            <!-- <button class="nav-btn" data-tab="statistics">📊 Estatísticas</button> -->
+            <button class="nav-btn" data-tab="reports">📋 Relatórios</button>
+            <!-- Botão de Configurações (visível apenas para administradores) -->
+            <button class="nav-btn" id="settingsNavBtn" data-tab="settings">⚙️ Configurações</button>
+        </nav>
+
+        <!-- Content Area -->
+        <main class="dashboard__content">
+            <!-- Overview Tab -->
+            <div id="tab-overview" class="tab-content active">
+                <div class="stats-grid">
+                    <div class="stat-card" data-action="students">
+                        <h3>Total de Alunos</h3>
+                        <div class="stat-value" id="totalStudents">-</div>
+                    </div>
+                    <div class="stat-card" data-action="classes">
+                        <h3>Turmas Ativas</h3>
+                        <div class="stat-value" id="totalClasses">-</div>
+                    </div>
+                    <div class="stat-card" data-action="infractions">
+                        <h3>Infrações (Mês)</h3>
+                        <div class="stat-value" id="monthInfractions">-</div>
+                    </div>
+                    <div class="stat-card" data-action="reports">
+                        <h3>Relatórios Gerados</h3>
+                        <div class="stat-value" id="totalReports">-</div>
+                    </div>
+                </div>
+
+                <div class="charts-grid">
+                    <div class="chart-container" style="position: relative; height: 350px;">
+                        <h3>Infrações por Mês</h3>
+                        <canvas id="infractionChart"></canvas>
+                    </div>
+                    <div class="chart-container" style="position: relative; height: 350px;">
+                        <h3>Tipos de Infrações</h3>
+                        <canvas id="typeChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Estatísticas Avançadas - agora dentro do Dashboard -->
+                <div class="advanced-stats">
+                    <div class="section-header">
+                        <h2>📊 Estatísticas Gerais e Análises</h2>
+                        <p>Análise completa com visualizações avançadas e indicadores</p>
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <h3>📈 Gráfico de Tendências</h3>
+                            <div class="chart-container" style="position: relative; height: 300px;">
+                                <canvas id="trendsChart"></canvas>
+                            </div>
+                            <button onclick="exportChart('trendsChart')" class="btn btn--sm btn--outline">💾 Exportar</button>
+                        </div>
+                        <div class="stat-card">
+                            <h3>🗺️ Mapa de Calor - Horários</h3>
+                            <div id="heatmapHours" class="heatmap-container"></div>
+                            <button onclick="exportHeatmap('hours')" class="btn btn--sm btn--outline">💾 Exportar</button>
+                        </div>
+                        <div class="stat-card">
+                            <h3>🏫 Mapa de Calor - Turmas</h3>
+                            <div id="heatmapClasses" class="heatmap-container"></div>
+                            <button onclick="exportHeatmap('classes')" class="btn btn--sm btn--outline">💾 Exportar</button>
+                        </div>
+                        <div class="stat-card">
+                            <h3>📊 Análise Comparativa</h3>
+                            <div class="chart-container" style="position: relative; height: 300px;">
+                                <canvas id="comparativeChart"></canvas>
+                            </div>
+                            <button onclick="exportChart('comparativeChart')" class="btn btn--sm btn--outline">💾 Exportar</button>
+                        </div>
+                        <div class="stat-card">
+                            <h3>🎯 KPIs Educacionais</h3>
+                            <div class="kpi-grid">
+                                <div class="kpi-item">
+                                    <span class="kpi-value" id="disciplineIndex">87%</span>
+                                    <span class="kpi-label">Índice de Disciplina</span>
+                                </div>
+                                <div class="kpi-item">
+                                    <span class="kpi-value" id="improvementRate">76%</span>
+                                    <span class="kpi-label">Taxa de Melhoria</span>
+                                </div>
+                                <div class="kpi-item">
+                                    <span class="kpi-value" id="parentEngagement">92%</span>
+                                    <span class="kpi-label">Engajamento Familiar</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>📅 Calendário de Eventos</h3>
+                            <div id="eventsCalendar" class="calendar-container">
+                                <div class="calendar-grid">
+                                    <div class="calendar-day">
+                                        <span class="day-number">07</span>
+                                        <span class="day-events">3 infrações</span>
+                                    </div>
+                                    <div class="calendar-day">
+                                        <span class="day-number">08</span>
+                                        <span class="day-events">2 infrações</span>
+                                    </div>
+                                    <div class="calendar-day">
+                                        <span class="day-number">09</span>
+                                        <span class="day-events">1 infração</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="stats-actions">
+                        <button onclick="generateFullReport()" class="btn btn--primary">📋 Relatório Completo</button>
+                        <button onclick="scheduleReport()" class="btn btn--info">⏰ Agendar Relatório</button>
+                        <button onclick="exportAllStats()" class="btn btn--success">📊 Exportar Todas</button>
+                        <button onclick="printDashboard()" class="btn btn--secondary">🖨️ Imprimir Dashboard</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Students Tab -->
+            <div id="tab-students" class="tab-content">
+                <div class="content-header">
+                    <h2>Gestão de Alunos</h2>
+                    <button class="btn btn--primary" id="addStudentBtn">➕ Novo Aluno</button>
+                </div>
+                <div class="data-table">
+                    <table id="studentsTable">
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>Turma</th>
+                                <th>Infrações</th>
+                                <th>Status</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="studentsTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Classes Tab -->
+            <div id="tab-classes" class="tab-content">
+                <div class="content-header">
+                    <h2>Gestão de Turmas</h2>
+                    <button class="btn btn--primary" id="addClassBtn">➕ Nova Turma</button>
+                </div>
+                <div class="classes-grid" id="classesGrid">
+                </div>
+            </div>
+
+            <!-- Infractions Tab -->
+            <div id="tab-infractions" class="tab-content">
+                <div class="content-header">
+                    <h2>Registro de Infrações</h2>
+                    <button class="btn btn--primary" id="addInfractionBtn">➕ Nova Infração</button>
+                </div>
+                <div class="filters">
+                    <select class="form-control" id="filterClass">
+                        <option value="">Todas as turmas</option>
+                    </select>
+                    <select class="form-control" id="filterType">
+                        <option value="">Todos os tipos</option>
+                        <option value="Atraso">Atraso</option>
+                        <option value="Falta">Falta</option>
+                        <option value="Comportamento">Comportamento</option>
+                        <option value="Material">Material</option>
+                    </select>
+                    <select class="form-control" id="filterSeverity">
+                        <option value="">Todas as gravidades</option>
+                        <option value="leve">Leve</option>
+                        <option value="media">Média</option>
+                        <option value="grave">Grave</option>
+                    </select>
+                </div>
+                <div class="data-table">
+                    <table id="infractionsTable">
+                        <thead>
+                            <tr>
+                                <th>Data</th>
+                                <th>Aluno</th>
+                                <th>Turma</th>
+                                <th>Tipo</th>
+                                <th>Gravidade</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="infractionsTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Filters Tab -->
+            <div id="tab-filters" class="tab-content">
+                <div class="section-header">
+                    <h2>🔍 Filtros e Consultas Avançadas</h2>
+                    <p>Sistema completo de filtros para análise detalhada dos dados</p>
+                </div>
+                
+                <div class="filters-grid">
+                    <div class="filter-card">
+                        <h3>📅 Filtros Temporais</h3>
+                        <div class="filter-group">
+                            <label class="form-label">Data Inicial:</label>
+                            <input type="date" id="filterStartDate" class="form-control">
+                        </div>
+                        <div class="filter-group">
+                            <label class="form-label">Data Final:</label>
+                            <input type="date" id="filterEndDate" class="form-control">
+                        </div>
+                        <div class="filter-group">
+                            <label class="form-label">Período:</label>
+                            <select id="filterPeriod" class="form-control">
+                                <option value="">Selecione</option>
+                                <option value="today">Hoje</option>
+                                <option value="week">Esta Semana</option>
+                                <option value="month">Este Mês</option>
+                                <option value="semester">Semestre</option>
+                                <option value="year">Ano Letivo</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="filter-card">
+                        <h3>⚖️ Filtros por Gravidade</h3>
+                        <div class="filter-checkboxes">
+                            <label><input type="checkbox" value="leve" id="filterGravityLight"> 💚 Leves</label>
+                            <label><input type="checkbox" value="media" id="filterGravityMedium"> 🟡 Médias</label>
+                            <label><input type="checkbox" value="grave" id="filterGravityHigh"> 🔴 Graves</label>
+                        </div>
+                    </div>
+                    
+                    <div class="filter-card">
+                        <h3>🏫 Filtros por Turma</h3>
+                        <select id="filterClassAdvanced" class="form-control">
+                            <option value="">Todas as Turmas</option>
+                        </select>
+                    </div>
+                    
+                    <div class="filter-card">
+                        <h3>👨‍🏫 Filtros por Responsável</h3>
+                        <select id="filterResponsible" class="form-control">
+                            <option value="">Todos os Responsáveis</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="filter-actions">
+                    <button onclick="applyFilters()" class="btn btn--primary">🔍 Aplicar Filtros</button>
+                    <button onclick="clearFilters()" class="btn btn--secondary">🧹 Limpar</button>
+                    <button onclick="saveFilterPreset()" class="btn btn--info">💾 Salvar Preset</button>
+                </div>
+                
+                <div class="filtered-results">
+                    <div id="filterResults" class="results-container"></div>
+                    <div class="results-actions">
+                        <button onclick="exportFilteredData('pdf')" class="btn btn--primary">📄 Gerar PDF</button>
+                        <button onclick="exportFilteredData('excel')" class="btn btn--success">📊 Exportar Excel</button>
+                        <button onclick="printFilteredResults()" class="btn btn--info">🖨️ Imprimir</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Statistics Tab -->
+            <!-- Moved Statistics content into overview tab: Stats tab removed -->
+
+            <!-- Reports Tab -->
+            <div id="tab-reports" class="tab-content">
+                <div class="content-header">
+                    <h2>📋 Sistema de Relatórios Educacionais</h2>
+                </div>
+
+                <div class="report-filters">
+                    <h3>Filtros para Relatórios</h3>
+                    <div class="filters-grid">
+                        <div class="filter-group">
+                            <label class="form-label">Período</label>
+                            <select class="form-control" id="reportPeriod">
+                                <option value="today">Hoje</option>
+                                <option value="yesterday">Ontem</option>
+                                <option value="thisWeek">Esta Semana</option>
+                                <option value="lastWeek">Semana Passada</option>
+                                <option value="thisMonth" selected>Este Mês</option>
+                                <option value="lastMonth">Mês Passado</option>
+                                <option value="thisSemester">Este Semestre</option>
+                                <option value="thisYear">Este Ano</option>
+                                <option value="custom">Período Personalizado</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label class="form-label">Gravidade</label>
+                            <select class="form-control" id="reportGravity">
+                                <option value="all">Todas as Gravidades</option>
+                                <option value="leve">Apenas Leves</option>
+                                <option value="media">Apenas Médias</option>
+                                <option value="grave">Apenas Graves</option>
+                                <option value="mediaGrave">Médias + Graves</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label class="form-label">Turma</label>
+                            <select class="form-control" id="reportClass">
+                                <option value="all">Todas as Turmas</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label class="form-label">Turno</label>
+                            <select class="form-control" id="reportShift">
+                                <option value="all">Todos os Turnos</option>
+                                <option value="morning">Matutino</option>
+                                <option value="afternoon">Vespertino</option>
+                                <option value="night">Noturno</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="customDateRange" class="custom-date-range hidden">
+                        <div class="filter-group">
+                            <label class="form-label">Data Início</label>
+                            <input type="date" class="form-control" id="reportStartDate">
+                        </div>
+                        <div class="filter-group">
+                            <label class="form-label">Data Fim</label>
+                            <input type="date" class="form-control" id="reportEndDate">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="reports-grid">
+                    <div class="report-card">
+                        <h3>📄 Advertência Individual</h3>
+                        <p>Gera relatório educacional completo com valores da escola e texto pedagógico editável</p>
+                        <div class="report-actions">
+                            <select class="form-control" id="studentForReport">
+                                <option value="">Selecione o aluno</option>
+                            </select>
+                            <button class="btn btn--primary" onclick="generateWarningReport()">📄 Gerar Advertência</button>
+                        </div>
+                    </div>
+                    <div class="report-card">
+                        <h3>👤 Histórico do Aluno</h3>
+                        <p>Relatório completo do histórico disciplinar individual</p>
+                        <div class="report-actions">
+                            <select class="form-control" id="studentForHistory">
+                                <option value="">Selecione o aluno</option>
+                            </select>
+                            <button class="btn btn--secondary" onclick="generateStudentHistory()">📚 Gerar Histórico</button>
+                        </div>
+                    </div>
+                    <div class="report-card">
+                        <h3>🏫 Relatório por Turma</h3>
+                        <p>Desempenho disciplinar consolidado da turma</p>
+                        <button class="btn btn--secondary" onclick="generateClassReport()">🏫 Gerar por Turma</button>
+                    </div>
+                    <div class="report-card">
+                        <h3>📊 Relatório Geral</h3>
+                        <p>Relatório estatístico geral com todos os filtros aplicados</p>
+                        <button class="btn btn--secondary" onclick="generateGeneralReport()">📊 Gerar Geral</button>
+                    </div>
+                    <div class="report-card">
+                        <h3>📈 Relatório Estatístico</h3>
+                        <p>Análise detalhada com gráficos e indicadores</p>
+                        <button class="btn btn--secondary" onclick="generateStatisticalReport()">📈 Gerar Estatístico</button>
+                    </div>
+                    <div class="report-card">
+                        <h3>📅 Relatório por Período</h3>
+                        <p>Infrações no período selecionado com análise temporal</p>
+                        <button class="btn btn--secondary" onclick="generatePeriodReport()">📅 Gerar por Período</button>
+                    </div>
+                </div>
+            </div>
+            <!-- Settings Tab -->
+            <div id="tab-settings" class="tab-content">
+                <div class="section-header">
+                    <h2>⚙️ Configurações</h2>
+                    <p>Gerencie convites de acesso, permissões e personalização de relatórios.</p>
+                </div>
+                <div class="settings-section">
+                    <h3>Convites de Acesso</h3>
+                    <p>Gere códigos de convite para novos usuários. Apenas quem possuir um código válido poderá acessar o sistema após o login pelo Google.</p>
+                    <button id="generateInviteBtn" class="btn btn--primary">➕ Gerar Convite</button>
+                    <div id="invitesList" class="invites-list"></div>
+                </div>
+                <div class="settings-section">
+                    <h3>Usuários Autorizados</h3>
+                    <p>Lista de usuários com acesso ao sistema. O primeiro usuário cadastrado é automaticamente definido como administrador.</p>
+                    <div id="allowedUsersList" class="users-list"></div>
+                </div>
+                <div class="settings-section">
+                    <h3>Personalização de Relatórios</h3>
+                    <div class="form-group">
+                        <label class="form-label">Cabeçalho dos Relatórios</label>
+                        <textarea id="reportHeaderInput" class="form-control" rows="2" placeholder="Ex: Escola Municipal de Lagarto"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Texto Pedagógico Padrão</label>
+                        <textarea id="defaultPedagogicalTextInput" class="form-control" rows="4" placeholder="Texto padrão a ser usado nos relatórios de advertência..."></textarea>
+                    </div>
+                    <button id="saveSettingsBtn" class="btn btn--success">💾 Salvar Configurações</button>
+                </div>
+
+                <!-- Seção de Personalização de Tema - visível para todos os usuários -->
+                <div class="settings-section">
+                    <h3>Personalização de Tema</h3>
+                    <p>Escolha uma das paletas de cores para personalizar a aparência do sistema. Essa configuração é salva apenas para o seu dispositivo.</p>
+                    <div class="form-group">
+                        <label class="form-label" for="themeSelect">Paleta de Cores</label>
+                        <select id="themeSelect" class="form-control">
+                            <option value="default">Padrão</option>
+                            <option value="blue">Azul</option>
+                            <option value="green">Verde</option>
+                            <option value="purple">Roxo</option>
+                            <option value="orange">Laranja</option>
+                        </select>
+                    </div>
+                    <button id="saveThemeBtn" class="btn btn--primary">🎨 Aplicar Tema</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal para Novo Aluno -->
+    <div id="studentModal" class="modal hidden">
+        <div class="modal__content">
+            <div class="modal__header">
+                <h3>Cadastrar Novo Aluno</h3>
+                <button class="modal__close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <form id="studentForm">
+                    <div class="form-group">
+                        <label class="form-label">Nome Completo</label>
+                        <input type="text" class="form-control" id="studentName" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Turma</label>
+                        <select class="form-control" id="studentClass" required>
+                            <option value="">Selecione uma turma</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Matrícula</label>
+                        <input type="text" class="form-control" id="studentId" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Turno</label>
+                        <select class="form-control" id="studentShift" required>
+                            <option value="">Selecione o turno</option>
+                            <option value="morning">Matutino</option>
+                            <option value="afternoon">Vespertino</option>
+                            <option value="night">Noturno</option>
+                        </select>
+                    </div>
+                </form>
+            </div>
+            <div class="modal__footer">
+                <button class="btn btn--outline" id="cancelStudentBtn">Cancelar</button>
+                <button class="btn btn--primary" id="saveStudentBtn">💾 Salvar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Nova Turma -->
+    <div id="classModal" class="modal hidden">
+        <div class="modal__content">
+            <div class="modal__header">
+                <h3>Cadastrar Nova Turma</h3>
+                <button class="modal__close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <form id="classForm">
+                    <div class="form-group">
+                        <label class="form-label">Nome da Turma</label>
+                        <input type="text" class="form-control" id="className" placeholder="Ex: 7º Ano A" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Ano Letivo</label>
+                        <input type="number" class="form-control" id="classYear" value="2024" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Professor Responsável</label>
+                        <input type="text" class="form-control" id="classTeacher" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Turno</label>
+                        <select class="form-control" id="classShift" required>
+                            <option value="">Selecione o turno</option>
+                            <option value="morning">Matutino</option>
+                            <option value="afternoon">Vespertino</option>
+                            <option value="night">Noturno</option>
+                        </select>
+                    </div>
+                </form>
+            </div>
+            <div class="modal__footer">
+                <button class="btn btn--outline" id="cancelClassBtn">Cancelar</button>
+                <button class="btn btn--primary" id="saveClassBtn">💾 Salvar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Nova Infração -->
+    <div id="infractionModal" class="modal hidden">
+        <div class="modal__content">
+            <div class="modal__header">
+                <h3>Registrar Nova Infração</h3>
+                <button class="modal__close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <form id="infractionForm">
+                    <div class="form-group">
+                        <label class="form-label">Aluno</label>
+                        <select class="form-control" id="infractionStudent" required>
+                            <option value="">Selecione um aluno</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Tipo de Infração</label>
+                        <select class="form-control" id="infractionType" required>
+                            <option value="">Selecione o tipo</option>
+                            <option value="Atraso">Atraso</option>
+                            <option value="Falta">Falta</option>
+                            <option value="Comportamento">Comportamento</option>
+                            <option value="Material">Material</option>
+                            <option value="Uniforme">Uniforme</option>
+                            <option value="Disciplina">Disciplina</option>
+                            <option value="Respeito">Desrespeito</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Gravidade</label>
+                        <select class="form-control" id="infractionSeverity" required>
+                            <option value="">Selecione a gravidade</option>
+                            <option value="leve">Leve</option>
+                            <option value="media">Média</option>
+                            <option value="grave">Grave</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Data</label>
+                        <input type="date" class="form-control" id="infractionDate" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Horário</label>
+                        <input type="time" class="form-control" id="infractionTime" required>
+                    </div>
+                    
+                    <!-- NOVA SEÇÃO: Responsável pela Observação -->
+                    <div class="form-group">
+                        <label class="form-label">👁️ Responsável pela Observação da Infração</label>
+                        <select class="form-control" id="responsibleType" onchange="updateResponsibleOptions()">
+                            <option value="">Selecione o tipo</option>
+                            <option value="professor">👨‍🏫 Professor</option>
+                            <option value="funcionario">👨‍💼 Funcionário</option>
+                            <option value="coordenacao">👩‍💼 Coordenação</option>
+                            <option value="direcao">🏛️ Direção</option>
+                        </select>
+                    </div>
+                    
+                    <div id="responsibleDetails" class="form-group hidden">
+                        <label class="form-label">Nome Completo do Responsável</label>
+                        <input type="text" class="form-control" id="responsibleName" placeholder="Digite o nome completo">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Descrição Detalhada</label>
+                        <textarea class="form-control" id="infractionDescription" rows="3" placeholder="Descreva detalhadamente o ocorrido..." required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Medidas Pedagógicas</label>
+                        <textarea class="form-control" id="infractionMeasures" rows="2" placeholder="Medidas aplicadas ou orientações dadas..."></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal__footer">
+                <button class="btn btn--outline" id="cancelInfractionBtn">Cancelar</button>
+                <button class="btn btn--primary" id="saveInfractionBtn">💾 Salvar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Editar Texto Pedagógico -->
+    <div id="pedagogicalTextModal" class="modal hidden">
+        <div class="modal__content">
+            <div class="modal__header">
+                <h3>📝 Editar Texto Pedagógico</h3>
+                <button class="modal__close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <div class="form-group">
+                    <label class="form-label">🎓 Texto Educacional da Escola</label>
+                    <textarea class="form-control" id="pedagogicalText" rows="10" placeholder="Digite aqui o texto pedagógico personalizado...">Nossa escola é um ambiente que preza pela EDUCAÇÃO INTEGRAL, formando não apenas estudantes, mas CIDADÃOS CONSCIENTES e PESSOAS DE CARÁTER.
+
+A EDUCAÇÃO é um processo colaborativo que exige a PARCERIA ATIVA entre escola e família. Nossa instituição acredita que:
+
+• A ESCOLA é responsável pela formação acadêmica e desenvolvimento de valores
+• A FAMÍLIA é a base fundamental para o desenvolvimento do caráter
+• A PARCERIA entre ambas fortalece o processo educativo
+• O DIÁLOGO constante é essencial para o sucesso do aluno</textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">📝 Observações Adicionais Específicas</label>
+                    <textarea class="form-control" id="additionalObservations" rows="4" placeholder="Adicione observações específicas sobre o aluno ou a situação..."></textarea>
+                </div>
+            </div>
+            <div class="modal__footer">
+                <button class="btn btn--outline" onclick="closePedagogicalModal()">Cancelar</button>
+                <button class="btn btn--primary" onclick="updateReportText()">💾 Atualizar Texto</button>
+            </div>
+        </div>
+    </div>
+    <!-- Modal para Código de Acesso -->
+    <div id="accessCodeModal" class="modal hidden">
+        <div class="modal__content">
+            <div class="modal__header">
+                <h3>🔐 Código de Acesso Necessário</h3>
+            </div>
+            <div class="modal__body">
+                <p>Insira o código de acesso fornecido pelo administrador para prosseguir:</p>
+                <input type="text" id="accessCodeInput" class="form-control" placeholder="Digite o código de acesso">
+                <div id="accessCodeError" class="error-text hidden">Código inválido ou expirado.</div>
+            </div>
+            <div class="modal__footer">
+                <button class="btn btn--outline" id="cancelAccessCodeBtn">Cancelar</button>
+                <button class="btn btn--primary" id="verifyAccessCodeBtn">Verificar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Selecionar Infração específica ou relatório geral do aluno -->
+    <div id="infractionSelectModal" class="modal hidden">
+        <div class="modal__content">
+            <div class="modal__header">
+                <h3>Selecionar Infração ou Histórico Completo</h3>
+                <button class="modal__close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <p>Selecione qual infração deseja usar como base para o relatório de advertência ou gere um relatório completo do aluno.</p>
+                <div id="infractionSelectionList" class="selection-list"></div>
+            </div>
+            <div class="modal__footer">
+                <button class="btn btn--outline" id="cancelInfractionSelectionBtn">Cancelar</button>
+                <button class="btn btn--secondary" id="generateGeneralStudentReportBtn">Histórico Completo</button>
+                <button class="btn btn--primary" id="confirmInfractionSelectionBtn">Gerar Advertência</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
