@@ -439,6 +439,19 @@ pre code {
   background: var(--color-primary-active);
 }
 
+.btn--danger {
+  background: var(--color-error);
+  color: var(--color-white);
+}
+
+.btn--danger:hover {
+  background: rgba(var(--color-red-500-rgb), 0.85);
+}
+
+.btn--danger:active {
+  background: rgba(var(--color-red-500-rgb), 0.75);
+}
+
 .btn--secondary {
   background: var(--color-secondary);
   color: var(--color-text);
@@ -1113,15 +1126,20 @@ select.form-control {
 
 .section-header h2 {
   color: var(--color-primary);
-  margin-bottom: var(--space-8);
+  margin-bottom: var(--space-12);
   font-size: var(--font-size-3xl);
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  line-height: 1.3;
+  flex-wrap: wrap;
 }
 
 .section-header p {
   color: var(--color-text-secondary);
   font-size: var(--font-size-lg);
   max-width: 600px;
-  margin: 0 auto;
+  margin: var(--space-4) auto 0 auto;
 }
 
 /* Stats Grid */
@@ -1161,6 +1179,50 @@ select.form-control {
   margin-bottom: var(--space-8);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.infraction-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  align-items: center;
+}
+
+.infraction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-8);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  background: rgba(var(--color-info-rgb), 0.12);
+  color: var(--color-text);
+  line-height: 1.2;
+}
+
+.infraction-chip.chip--muted {
+  opacity: 0.65;
+}
+
+.infraction-chip.chip--leve {
+  background: rgba(255, 221, 89, 0.25);
+  color: #8a5800;
+}
+
+.infraction-chip.chip--media {
+  background: rgba(255, 163, 102, 0.25);
+  color: #9a3412;
+}
+
+.infraction-chip.chip--grave {
+  background: rgba(219, 69, 69, 0.25);
+  color: #7f1d1d;
+}
+
+.infraction-chip.chip--total {
+  background: rgba(var(--color-teal-500-rgb), 0.2);
+  color: var(--color-primary);
 }
 
 .stat-value {
@@ -1322,6 +1384,97 @@ select.form-control {
   justify-content: center;
   color: var(--color-text-secondary);
   margin-bottom: var(--space-12);
+}
+
+.heatmap-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.heatmap-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-10) var(--space-12);
+  background: rgba(var(--color-teal-500-rgb), 0.08);
+  border: 1px solid var(--color-card-border);
+  border-radius: var(--radius-base);
+  backdrop-filter: blur(4px);
+}
+
+.heatmap-slot {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.heatmap-count {
+  font-weight: var(--font-weight-medium);
+  padding: var(--space-4) var(--space-10);
+  border-radius: var(--radius-full);
+}
+
+.heatmap-count--alta {
+  background: rgba(219, 69, 69, 0.25);
+  color: #b91c1c;
+}
+
+.heatmap-count--media {
+  background: rgba(255, 163, 102, 0.25);
+  color: #c2410c;
+}
+
+.heatmap-count--baixa {
+  background: rgba(31, 184, 205, 0.2);
+  color: #0f766e;
+}
+
+.heatmap-empty {
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  padding: var(--space-12);
+  width: 100%;
+}
+
+.suspension-summary {
+  list-style: none;
+  margin: var(--space-8) 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-8);
+}
+
+.suspension-summary li {
+  background: rgba(var(--color-gray-300-rgb), 0.12);
+  border-radius: var(--radius-base);
+  padding: var(--space-8) var(--space-10);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+}
+
+.suspension-summary li span {
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+.modal__subtitle {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--space-6);
+}
+
+.modal__description {
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-10);
+  white-space: pre-line;
 }
 
 /* Calendar Container - NEW */
