@@ -112,6 +112,18 @@ class EducaFlowPro {
         this.currentReportStudentName = null;
         this.currentReportInfractions = null;
         
+        // Controle de fluxo de autenticação para evitar loops de login em
+        // navegadores móveis e contextos com redirect.
+        this.awaitingRedirectResult = false;
+        this.handledAuthUid = null;
+
+        // Estruturas auxiliares para contagem de infrações, sugestões de
+        // suspensão e resumos estatísticos.
+        this.cachedInfractionSummary = null;
+        this.lastInfractionSummaryAt = 0;
+        this.suspensionTrackers = new Map();
+        this.pendingSuspensionSuggestion = null;
+        
         // Configuração Firebase REAL
         this.firebaseConfig = {
             apiKey: "AIzaSyDIP9AMW1IE7gUMZowNNrws9cgkYIzQLXY",
@@ -246,6 +258,188 @@ class EducaFlowPro {
 
         return { ownerId, wasClaimed };
     }
+
+    static determineSuspensionDuration(issuedCount = 0) {
+        if (issuedCount <= 0) return 1;
+        if (issuedCount === 1) return 3;
+        return 5;
+    }
+
+    static formatTimeSlot(rawTime) {
+        if (!rawTime || typeof rawTime !== 'string') return null;
+        const parts = rawTime.split(':');
+        if (parts.length < 2) return null;
+        const hour = Number.parseInt(parts[0], 10);
+        const minute = Number.parseInt(parts[1], 10);
+        if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
+
+        const normalizedHour = Math.min(Math.max(hour, 0), 23);
+        const slotStartMinute = minute < 30 ? 0 : 30;
+        const slotEndMinute = slotStartMinute === 0 ? 29 : 59;
+
+        const start = `${String(normalizedHour).padStart(2, '0')}:${String(slotStartMinute).padStart(2, '0')}`;
+        const end = `${String(normalizedHour).padStart(2, '0')}:${String(slotEndMinute).padStart(2, '0')}`;
+        return `${start} - ${end}`;
+    }
+
+    getStudentStorageKey(studentId, studentName) {
+        if (studentId) return String(studentId);
+        if (!studentName) return null;
+        const normalized = studentName
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .trim()
+            .replace(/[^a-z0-9]+/g, '-');
+        return normalized ? normalized.replace(/^-+|-+$/g, '') : null;
+    }
+
+    normalizeSuspensionTracker(data = {}, defaults = {}) {
+        const base = {
+            studentId: defaults.studentId || data.studentId || null,
+            studentName: defaults.studentName || data.studentName || '',
+            leveCount: Number(data.leveCount) || 0,
+            mediaCount: Number(data.mediaCount) || 0,
+            graveCount: Number(data.graveCount) || 0,
+            issuedSuspensions: Number(data.issuedSuspensions) || 0,
+            awaitingReport: Boolean(data.awaitingReport),
+            triggerReason: data.triggerReason || '',
+            suggestedDuration: Number(data.suggestedDuration) || null,
+            lastTriggeredAt: data.lastTriggeredAt || null,
+            history: Array.isArray(data.history) ? [...data.history] : [],
+            updatedAt: data.updatedAt || Date.now(),
+        };
+        return base;
+    }
+
+    async fetchSuspensionTracker(key, defaults = {}) {
+        if (!key) {
+            return this.normalizeSuspensionTracker({}, defaults);
+        }
+
+        if (this.suspensionTrackers.has(key)) {
+            return this.normalizeSuspensionTracker(this.suspensionTrackers.get(key), defaults);
+        }
+
+        let tracker = null;
+
+        if (this.isDemoMode) {
+            if (!this.demoData.suspensionTrackers) {
+                this.demoData.suspensionTrackers = {};
+            }
+            tracker = this.demoData.suspensionTrackers[key] || null;
+        } else {
+            const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
+            if (ownerId && this.database) {
+                try {
+                    const snapshot = await this.database.ref(`users/${ownerId}/suspensionTrackers/${key}`).once('value');
+                    tracker = snapshot.val();
+                } catch (error) {
+                    console.warn('⚠️ Não foi possível ler tracker de suspensão:', error);
+                }
+            }
+        }
+
+        const normalized = this.normalizeSuspensionTracker(tracker || {}, defaults);
+        this.suspensionTrackers.set(key, normalized);
+        if (this.isDemoMode) {
+            this.demoData.suspensionTrackers[key] = { ...normalized };
+        }
+        return normalized;
+    }
+
+    async saveSuspensionTracker(key, tracker) {
+        if (!key) return;
+        const normalized = this.normalizeSuspensionTracker(tracker);
+        normalized.updatedAt = Date.now();
+
+        if (this.isDemoMode) {
+            if (!this.demoData.suspensionTrackers) {
+                this.demoData.suspensionTrackers = {};
+            }
+            this.demoData.suspensionTrackers[key] = { ...normalized };
+            this.suspensionTrackers.set(key, { ...normalized });
+            return;
+        }
+
+        const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
+        if (!ownerId || !this.database) {
+            return;
+        }
+
+        const ref = this.database.ref(`users/${ownerId}/suspensionTrackers/${key}`);
+        const payload = {
+            ...normalized,
+            updatedAt: firebase.database.ServerValue.TIMESTAMP,
+        };
+
+        try {
+            await ref.set(payload);
+            this.suspensionTrackers.set(key, { ...normalized });
+        } catch (error) {
+            console.error('❌ Não foi possível salvar tracker de suspensão:', error);
+        }
+    }
+
+    evaluateSuspensionTrigger(tracker) {
+        if (!tracker) {
+            return { shouldSuggest: false, reason: null, suggestedDuration: null };
+        }
+
+        const leve = Number(tracker.leveCount) || 0;
+        const media = Number(tracker.mediaCount) || 0;
+        const grave = Number(tracker.graveCount) || 0;
+
+        let reason = null;
+        if (grave >= 1) {
+            reason = '1 infração grave registrada';
+        } else if (media >= 2) {
+            reason = '2 infrações médias registradas';
+        } else if (leve >= 3) {
+            reason = '3 infrações leves registradas';
+        }
+
+        if (!reason) {
+            return { shouldSuggest: false, reason: null, suggestedDuration: null };
+        }
+
+        const suggestedDuration = EducaFlowPro.determineSuspensionDuration(Number(tracker.issuedSuspensions) || 0);
+        return { shouldSuggest: true, reason, suggestedDuration };
+    }
+
+    async updateSuspensionCounters(studentInfo, severity) {
+        const { id = null, name = '' } = studentInfo || {};
+        const key = this.getStudentStorageKey(id, name);
+        if (!key) {
+            return { key: null, tracker: null, shouldSuggest: false };
+        }
+
+        const tracker = await this.fetchSuspensionTracker(key, { studentId: id, studentName: name });
+        const field = severity === 'grave' ? 'graveCount' : severity === 'media' ? 'mediaCount' : 'leveCount';
+        tracker[field] = (Number(tracker[field]) || 0) + 1;
+        tracker.studentId = tracker.studentId || id || null;
+        tracker.studentName = tracker.studentName || name || '';
+
+        const trigger = this.evaluateSuspensionTrigger(tracker);
+        const shouldSuggest = trigger.shouldSuggest && !tracker.awaitingReport;
+
+        if (shouldSuggest) {
+            tracker.awaitingReport = true;
+            tracker.triggerReason = trigger.reason;
+            tracker.suggestedDuration = trigger.suggestedDuration;
+            tracker.lastTriggeredAt = Date.now();
+        }
+
+        await this.saveSuspensionTracker(key, tracker);
+
+        return {
+            key,
+            tracker,
+            shouldSuggest,
+            reason: shouldSuggest ? trigger.reason : tracker.triggerReason || null,
+            suggestedDuration: shouldSuggest ? trigger.suggestedDuration : tracker.suggestedDuration || trigger.suggestedDuration,
+        };
+    }
     
     getSessionStorage() {
         if (this.sessionStorageOverride) {
@@ -268,21 +462,29 @@ class EducaFlowPro {
 
     setRedirectInProgress() {
         const storage = this.getSessionStorage();
-        if (!storage) return false;
+        if (!storage) {
+            this.awaitingRedirectResult = true;
+            return false;
+        }
         try {
             storage.setItem(this.redirectStorageKey, 'true');
+            this.awaitingRedirectResult = true;
             return true;
         } catch (error) {
             console.warn('⚠️ Não foi possível registrar redirect em andamento:', error);
             return false;
         }
     }
-
+    
     clearRedirectInProgress() {
         const storage = this.getSessionStorage();
-        if (!storage) return false;
+        if (!storage) {
+            this.awaitingRedirectResult = false;
+            return false;
+        }
         try {
             storage.removeItem(this.redirectStorageKey);
+            this.awaitingRedirectResult = false;
             return true;
         } catch (error) {
             console.warn('⚠️ Não foi possível limpar flag de redirect:', error);
@@ -396,11 +598,19 @@ class EducaFlowPro {
             // Configurar listeners
             this.setupAuthListener();
 
+            // Se um redirect estiver em andamento, aguardar antes de exibir a tela de login
+            this.awaitingRedirectResult = this.isRedirectInProgress();
+            
             // Processar resultado de redirecionamento (login via redirect) caso exista
             try {
                 const redirectResult = await this.auth.getRedirectResult();
                 if (redirectResult && redirectResult.user) {
                     console.log('🎯 Resultado de login via redirect processado:', redirectResult.user.email);
+                await this.handleAuthenticatedUser(redirectResult.user, {
+                        fromRedirect: true,
+                        force: true,
+                        silentOnError: true,
+                    });
                 }
             } catch (redirectError) {
                 // Em alguns navegadores, getRedirectResult pode lançar se não houver resultado
@@ -515,20 +725,10 @@ class EducaFlowPro {
     }
 
     setupAuthListener() {
-        this.auth.onAuthStateChanged((user) => {
+        if (!this.auth) return;
+        this.auth.onAuthStateChanged(async (user) => {
             console.log('🔐 Estado de auth:', user ? user.email : 'Desconectado');
-            if (user) {
-                this.currentUser = user;
-                this.hideSplash();
-                // Verificar permissões e prosseguir; o dashboard será mostrado após a verificação
-                this.checkUserPermission();
-            } else {
-                this.currentUser = null;
-                if (this.isInitialized) {
-                    this.hideSplash();
-                    this.showLogin();
-                }
-            }
+            await this.handleAuthenticatedUser(user, { source: 'listener' });
         });
     }
 
@@ -537,6 +737,10 @@ class EducaFlowPro {
         
         const currentUser = this.auth.currentUser;
         if (!currentUser) {
+             if (this.awaitingRedirectResult) {
+                console.log('⏳ Aguardando resultado do login via redirecionamento...');
+                return;
+            }
             this.hideSplash();
             this.showLogin();
         }
@@ -595,12 +799,13 @@ class EducaFlowPro {
                 if (this.isRedirectInProgress()) {
                     console.warn('⚠️ Redirect já em andamento, aguardando resultado.');
                     return;
-            }
-            this.setRedirectInProgress();
+                }    
+                this.setRedirectInProgress();
+                this.awaitingRedirectResult = true;
                 await this.auth.signInWithRedirect(this.googleProvider);
                 return;
-            }  
-                       
+            }
+            
             try {
                 const result = await this.auth.signInWithPopup(this.googleProvider);
                 const userEmail = result?.user?.email || 'usuário';
@@ -624,7 +829,8 @@ class EducaFlowPro {
                 if (!this.isRedirectInProgress()) {
                     this.setRedirectInProgress();
                 }
-
+                this.awaitingRedirectResult = true;
+                
                 try {
                     await this.auth.signInWithRedirect(this.googleProvider);
                     return;
@@ -648,6 +854,45 @@ class EducaFlowPro {
             // Reabilita o botão e oculta o indicador de carregamento
             loginBtn.disabled = false;
             loginLoading.classList.add('hidden');
+        }
+    }
+
+    async handleAuthenticatedUser(user, context = {}) {
+        if (!user) {
+            this.currentUser = null;
+            if (context.clearHandled !== false) {
+                this.handledAuthUid = null;
+            }
+            if (context.fromRedirect) {
+                this.awaitingRedirectResult = false;
+            }
+            if (this.isInitialized && !this.awaitingRedirectResult && !context.skipLogin) {
+                this.hideSplash();
+                this.showLogin();
+            }
+            return;
+        }
+
+        const uid = user.uid;
+        const alreadyHandled = this.handledAuthUid === uid && !context.force;
+        this.currentUser = user;
+
+        if (alreadyHandled) {
+            this.awaitingRedirectResult = false;
+            return;
+        }
+
+        this.handledAuthUid = uid;
+        this.awaitingRedirectResult = false;
+        this.hideSplash();
+
+        try {
+            await this.checkUserPermission();
+        } catch (error) {
+            console.error('❌ Erro ao processar usuário autenticado:', error);
+            if (!context.silentOnError) {
+                this.showToast('Erro ao concluir o login. Tente novamente.', 'error');
+            }
         }
     }
 
@@ -718,6 +963,7 @@ class EducaFlowPro {
         console.log('📊 Carregando dados do dashboard...');
         
         try {
+            this.invalidateInfractionSummary();
             if (this.isDemoMode) {
                 await this.createDemoData();
             }
@@ -727,11 +973,11 @@ class EducaFlowPro {
             await this.loadClasses();
             await this.loadInfractions();
             
+            await this.createHeatmaps();
             this.createCharts();
             this.populateAllSelects();
             this.setupFilters();
-            this.createHeatmaps();
-            
+                        
             console.log('✅ Dashboard carregado com sucesso!');
             this.showToast('Sistema sincronizado!', 'success');
             
@@ -745,6 +991,7 @@ class EducaFlowPro {
                 this.loadStudents();
                 this.loadClasses();
                 this.loadInfractions();
+                this.createHeatmaps();
             }, 2000);
         }
     }
@@ -770,9 +1017,11 @@ class EducaFlowPro {
                 { id: '4', nome: '8º B', ano: 2024, professor: 'Prof. João Oliveira', turno: 'morning', alunos: 24, infracoes: 4 },
                 { id: '5', nome: '9º A', ano: 2024, professor: 'Prof. Patricia Lima', turno: 'afternoon', alunos: 22, infracoes: 2 }
             ],
+            suspensionTrackers: {},
+            suspensions: [],
             infractions: [
-                { 
-                    id: '1', 
+                 {
+                    id: '1',
                     aluno: 'Ana Silva Santos', 
                     tipo: 'Atraso', 
                     gravidade: 'leve', 
@@ -1100,8 +1349,13 @@ class EducaFlowPro {
                 // Atualiza o cache interno de alunos para busca rápida
                 this.studentsCache = Array.isArray(students) ? [...students] : [];
 
+                 const infractions = await this.getAllInfractions();
+                const summary = this.computeInfractionSummary(infractions, students);
+                this.cachedInfractionSummary = summary;
+                this.lastInfractionSummaryAt = Date.now();
+
                 students.forEach(student => {
-                    const row = this.createStudentRow(student.id, student);
+                   const row = this.createStudentRow(student.id, student, summary);
                     tbody.appendChild(row);
                 });
             }
@@ -1110,12 +1364,14 @@ class EducaFlowPro {
         }
     }
 
-    createStudentRow(id, student) {
+    createStudentRow(id, student, summary) {
         const row = document.createElement('tr');
+        const counts = this.getStudentCountsFromSummary(summary, student);
+        const badges = this.renderInfractionBadges(counts);
         row.innerHTML = `
             <td>${student.nome}</td>
-            <td>${student.turma || 'N/A'}</td>
-            <td>${student.infracoes || 0}</td>
+            <td>${counts.className || student.turma || 'N/A'}</td>
+            <td>${badges}</td>
             <td><span class="status status--active">Ativo</span></td>
             <td>
                 <button class="btn btn--sm btn--outline" onclick="app.editStudent('${id}')">✏️ Editar</button>
@@ -1456,30 +1712,25 @@ class EducaFlowPro {
         }
     }
 
-    createHeatmaps() {
-        // Simular heatmaps
-        const heatmapHours = document.getElementById('heatmapHours');
-        if (heatmapHours) {
-            heatmapHours.innerHTML = `
-                <div style="text-align: center; color: var(--color-text-secondary);">
-                    🕐 Horários de Maior Incidência:<br>
-                    07:30-08:00: <span style="color: #DB4545;">Alta</span><br>
-                    13:00-14:00: <span style="color: #FFC185;">Média</span><br>
-                    15:30-16:00: <span style="color: #1FB8CD;">Baixa</span>
-                </div>
-            `;
-        }
-        
-        const heatmapClasses = document.getElementById('heatmapClasses');
-        if (heatmapClasses) {
-            heatmapClasses.innerHTML = `
-                <div style="text-align: center; color: var(--color-text-secondary);">
-                    🏫 Turmas com Mais Ocorrências:<br>
-                    7º A: <span style="color: #DB4545;">5 infrações</span><br>
-                    8º B: <span style="color: #FFC185;">4 infrações</span><br>
-                    9º A: <span style="color: #1FB8CD;">2 infrações</span>
-                </div>
-            `;
+    async createHeatmaps() {
+        try {
+            const summary = await this.getInfractionsSummary();
+            const heatmapHours = document.getElementById('heatmapHours');
+            if (heatmapHours) {
+                heatmapHours.innerHTML = this.renderTimeHeatmap(summary.byTimeSlot);
+            }
+
+            const heatmapClasses = document.getElementById('heatmapClasses');
+            if (heatmapClasses) {
+                heatmapClasses.innerHTML = this.renderClassHeatmap(summary.byClass);
+            }
+        } catch (error) {
+            console.error('❌ Erro ao gerar mapas de calor:', error);
+            const fallback = '<div class="heatmap-empty">Não foi possível carregar os mapas de calor.</div>';
+            const heatmapHours = document.getElementById('heatmapHours');
+            if (heatmapHours) heatmapHours.innerHTML = fallback;
+            const heatmapClasses = document.getElementById('heatmapClasses');
+            if (heatmapClasses) heatmapClasses.innerHTML = fallback;
         }
     }
 
@@ -1565,7 +1816,8 @@ class EducaFlowPro {
         const selects = [
             document.getElementById('infractionStudent'),
             document.getElementById('studentForReport'),
-            document.getElementById('studentForHistory')
+            document.getElementById('studentForHistory'),
+            document.getElementById('studentForSuspension')
         ];
         selects.forEach(select => {
             if (select) {
@@ -1730,6 +1982,11 @@ class EducaFlowPro {
         if (generateGeneralStudentReportBtn) {
             generateGeneralStudentReportBtn.onclick = () => this.generateGeneralStudentReport();
         }
+       
+        const generateSuspensionBtn = document.getElementById('generateSuspensionBtn');
+        if (generateSuspensionBtn) {
+            generateSuspensionBtn.onclick = () => this.confirmSuspensionGeneration();
+        }
     }
 
     // BUGFIX: Função switchTab corrigida
@@ -1770,7 +2027,7 @@ class EducaFlowPro {
         // Estatísticas foram integradas ao dashboard; carregue gráficos e heatmaps ao abrir o dashboard
         if (tabName === 'overview') {
             setTimeout(() => {
-                this.createHeatmaps();
+                 this.createHeatmaps().catch(err => console.error('❌ Erro ao atualizar mapas de calor:', err));
                 this.createCharts();
             }, 100);
         }
@@ -1858,6 +2115,8 @@ class EducaFlowPro {
                         this.resetClassModal();
                     } else if (id === 'infractionModal') {
                         this.resetInfractionModal();
+                    } else if (id === 'suspensionModal') {
+                        this.resetSuspensionModal();
                     }
                     console.log('✅ Modal fechado via X');
                 }
@@ -1884,12 +2143,22 @@ class EducaFlowPro {
                             this.resetInfractionModal();
                         } else if (id === 'infractionSelectModal') {
                             this.resetInfractionSelectionModal();
+                        } else if (id === 'suspensionModal') {
+                        this.resetSuspensionModal();
                         }
                         console.log('✅ Modal fechado via Cancelar');
                     }
                 };
             }
         });
+
+        const cancelSuspensionBtn = document.getElementById('cancelSuspensionBtn');
+        if (cancelSuspensionBtn) {
+            cancelSuspensionBtn.onclick = (e) => {
+                e.preventDefault();
+                this.closeSuspensionModal();
+            };
+        }
 
         // Fechar modal clicando no overlay
         document.querySelectorAll('.modal').forEach(modal => {
@@ -1906,6 +2175,8 @@ class EducaFlowPro {
                         this.resetInfractionModal();
                     } else if (id === 'infractionSelectModal') {
                         this.resetInfractionSelectionModal();
+                    } else if (id === 'suspensionModal') {
+                        this.resetSuspensionModal();
                     }
                     console.log('✅ Modal fechado via overlay');
                 }
@@ -1917,6 +2188,18 @@ class EducaFlowPro {
         document.querySelectorAll('.modal').forEach(modal => {
             if (!modal.classList.contains('hidden')) {
                 modal.classList.add('hidden');
+                const id = modal.id;
+                if (id === 'studentModal') {
+                    this.resetStudentModal();
+                } else if (id === 'classModal') {
+                    this.resetClassModal();
+                } else if (id === 'infractionModal') {
+                    this.resetInfractionModal();
+                } else if (id === 'infractionSelectModal') {
+                    this.resetInfractionSelectionModal();
+                } else if (id === 'suspensionModal') {
+                    this.resetSuspensionModal();
+                }
                 console.log('✅ Modal fechado via ESC');
             }
         });
@@ -1994,6 +2277,7 @@ class EducaFlowPro {
             
 
             // Atualiza as listas de alunos, estatísticas e turmas após o cadastro
+            this.invalidateInfractionSummary();
             await this.loadStudents();
             await this.loadStatistics();
             await this.loadClasses();
@@ -2165,9 +2449,14 @@ class EducaFlowPro {
             document.getElementById('infractionForm').reset();
             document.getElementById('responsibleDetails').classList.add('hidden');
             
+            this.invalidateInfractionSummary();
+
+            await this.afterInfractionSaved({ studentId, studentName: student, severity });
+
             await this.loadInfractions();
             await this.loadStudents();
             await this.loadStatistics();
+            await this.createHeatmaps();
             this.populateAllSelects();
             
             this.showToast('Infração registrada com sucesso!', 'success');
@@ -2712,6 +3001,687 @@ class EducaFlowPro {
         return students;
     }
 
+    invalidateInfractionSummary() {
+        this.cachedInfractionSummary = null;
+        this.lastInfractionSummaryAt = 0;
+    }
+
+    computeInfractionSummary(infractions = [], students = []) {
+        const byStudentId = new Map();
+        const byStudentName = new Map();
+        const byClass = new Map();
+        const byTimeSlot = new Map();
+        const studentsMeta = new Map();
+        const studentNameToKey = new Map();
+        const severityTotals = { leve: 0, media: 0, grave: 0 };
+
+        const ensureStudentBucket = (map, key, name, turma) => {
+            if (!map.has(key)) {
+                map.set(key, {
+                    studentName: name || '',
+                    className: turma || '',
+                    total: 0,
+                    leve: 0,
+                    media: 0,
+                    grave: 0,
+                    infractions: [],
+                });
+            }
+            return map.get(key);
+        };
+
+        students.forEach((student) => {
+            const key = this.getStudentStorageKey(student.id || null, student.nome);
+            if (key) {
+                studentsMeta.set(key, { ...student });
+                studentNameToKey.set(student.nome, key);
+            }
+        });
+
+        const clonedInfractions = [];
+
+        infractions.forEach((inf) => {
+            if (!inf) return;
+            const clone = { ...inf };
+            clonedInfractions.push(clone);
+            let severity = (clone.gravidade || 'leve').toLowerCase();
+            if (!['leve', 'media', 'grave'].includes(severity)) {
+                severity = 'leve';
+            }
+            severityTotals[severity] += 1;
+
+            const classKey = clone.turma || 'Turma não informada';
+            const classBucket = byClass.get(classKey) || { total: 0, leve: 0, media: 0, grave: 0 };
+            classBucket.total += 1;
+            classBucket[severity] += 1;
+            byClass.set(classKey, classBucket);
+
+            const slot = EducaFlowPro.formatTimeSlot(clone.horario) || 'Horário não informado';
+            const slotBucket = byTimeSlot.get(slot) || { total: 0 };
+            slotBucket.total += 1;
+            byTimeSlot.set(slot, slotBucket);
+
+            const studentKey = clone.studentId
+                || studentNameToKey.get(clone.aluno || '')
+                || this.getStudentStorageKey(null, clone.aluno || '');
+
+            if (studentKey) {
+                const studentBucket = ensureStudentBucket(byStudentId, studentKey, clone.aluno, clone.turma);
+                studentBucket.total += 1;
+                studentBucket[severity] += 1;
+                studentBucket.className = clone.turma || studentBucket.className;
+                studentBucket.infractions.push(clone);
+            }
+
+            const nameKey = clone.aluno || 'Aluno não identificado';
+            const nameBucket = ensureStudentBucket(byStudentName, nameKey, clone.aluno, clone.turma);
+            nameBucket.total += 1;
+            nameBucket[severity] += 1;
+            nameBucket.className = clone.turma || nameBucket.className;
+            nameBucket.infractions.push(clone);
+        });
+
+        return {
+            byStudentId,
+            byStudentName,
+            byClass,
+            byTimeSlot,
+            studentsMeta,
+            studentNameToKey,
+            severityTotals,
+            totalInfractions: infractions.length,
+            rawInfractions: clonedInfractions,
+            generatedAt: Date.now(),
+        };
+    }
+
+    async getInfractionsSummary({ forceRefresh = false, students = null, infractions = null } = {}) {
+        if (!forceRefresh && this.cachedInfractionSummary) {
+            return this.cachedInfractionSummary;
+        }
+
+        const [allInfractions, allStudents] = await Promise.all([
+            infractions ? Promise.resolve(infractions) : this.getAllInfractions(),
+            students ? Promise.resolve(students) : this.getAllStudents(),
+        ]);
+
+        const summary = this.computeInfractionSummary(allInfractions, allStudents);
+        this.cachedInfractionSummary = summary;
+        this.lastInfractionSummaryAt = Date.now();
+        return summary;
+    }
+
+    getStudentCountsFromSummary(summary, student) {
+        if (!summary || !student) {
+            return { total: 0, leve: 0, media: 0, grave: 0, infractions: [], className: student?.turma || '' };
+        }
+        const key = this.getStudentStorageKey(student.id || null, student.nome);
+        let bucket = null;
+        if (key) {
+            bucket = summary.byStudentId.get(key);
+        }
+        if (!bucket) {
+            bucket = summary.byStudentName.get(student.nome);
+        }
+        if (!bucket) {
+            return { total: 0, leve: 0, media: 0, grave: 0, infractions: [], className: student.turma || '' };
+        }
+        return {
+            total: bucket.total || 0,
+            leve: bucket.leve || 0,
+            media: bucket.media || 0,
+            grave: bucket.grave || 0,
+            infractions: Array.isArray(bucket.infractions) ? [...bucket.infractions] : [],
+            className: bucket.className || student.turma || '',
+        };
+    }
+
+    buildInfractionChip(count, label, className, { mutedWhenZero = true, prefix = '' } = {}) {
+        const value = Number(count) || 0;
+        const isZero = value === 0;
+        const classes = ['infraction-chip', className];
+        if (isZero && mutedWhenZero) {
+            classes.push('chip--muted');
+        }
+        const displayLabel = prefix ? `${prefix}: ${value}` : `${label}: ${value}`;
+        return `<span class="${classes.join(' ')}" title="${label}">${displayLabel}</span>`;
+    }
+
+    renderInfractionBadges(counts) {
+        if (!counts) {
+            return '<div class="infraction-counts">0</div>';
+        }
+        const badges = [
+            this.buildInfractionChip(counts.leve, 'Infrações leves', 'chip--leve', { prefix: 'L' }),
+            this.buildInfractionChip(counts.media, 'Infrações médias', 'chip--media', { prefix: 'M' }),
+            this.buildInfractionChip(counts.grave, 'Infrações graves', 'chip--grave', { prefix: 'G' }),
+            this.buildInfractionChip(counts.total, 'Total de infrações', 'chip--total', { mutedWhenZero: false, prefix: 'Total' }),
+        ];
+        return `<div class="infraction-counts">${badges.join('')}</div>`;
+    }
+
+    getHeatmapIntensityClass(count, max) {
+        if (!max || max <= 0) return 'heatmap-count--baixa';
+        const ratio = count / max;
+        if (ratio >= 0.75) return 'heatmap-count--alta';
+        if (ratio >= 0.4) return 'heatmap-count--media';
+        return 'heatmap-count--baixa';
+    }
+
+    getTopEntriesFromMap(map, limit = 3) {
+        if (!map || typeof map.size === 'undefined') return [];
+        return [...map.entries()]
+            .map(([key, value]) => ({ key, total: value.total || 0 }))
+            .filter(item => item.total > 0)
+            .sort((a, b) => b.total - a.total || a.key.localeCompare(b.key))
+            .slice(0, limit);
+    }
+
+    renderTimeHeatmap(map) {
+        const entries = this.getTopEntriesFromMap(map);
+        if (entries.length === 0) {
+            return '<div class="heatmap-empty">Nenhuma infração registrada para gerar o mapa de horários.</div>';
+        }
+        const max = entries[0].total || 1;
+        const items = entries.map((entry) => {
+            const intensity = this.getHeatmapIntensityClass(entry.total, max);
+            const label = entry.total === 1 ? 'infração' : 'infrações';
+            return `<li><span class="heatmap-slot">${entry.key}</span><span class="heatmap-count ${intensity}">${entry.total} ${label}</span></li>`;
+        });
+        return `<ul class="heatmap-list">${items.join('')}</ul>`;
+    }
+
+    renderClassHeatmap(map) {
+        const entries = this.getTopEntriesFromMap(map);
+        if (entries.length === 0) {
+            return '<div class="heatmap-empty">Nenhuma infração registrada para gerar o mapa por turma.</div>';
+        }
+        const max = entries[0].total || 1;
+        const items = entries.map((entry) => {
+            const intensity = this.getHeatmapIntensityClass(entry.total, max);
+            const label = entry.total === 1 ? 'infração' : 'infrações';
+            return `<li><span class="heatmap-slot">${entry.key}</span><span class="heatmap-count ${intensity}">${entry.total} ${label}</span></li>`;
+        });
+        return `<ul class="heatmap-list">${items.join('')}</ul>`;
+    }
+
+    async getInfractionSummaryForStudent(studentId, studentName, options = {}) {
+        const { summary: providedSummary = null, studentRecord: providedStudentRecord = null } = options || {};
+        let summary = providedSummary;
+        if (!summary) {
+            summary = await this.getInfractionsSummary({ forceRefresh: true });
+        }
+
+        let studentRecord = providedStudentRecord || null;
+        if (!studentRecord && studentName) {
+            try {
+                studentRecord = await this.findStudentDataByName(studentName);
+            } catch (error) {
+                console.warn('⚠️ Não foi possível localizar dados completos do aluno:', error);
+            }
+        }
+
+        const fallbackStudent = {
+            id: studentRecord?.id || studentId,
+            nome: studentRecord?.nome || studentName,
+            turma: studentRecord?.turma || '',
+        };
+
+        const studentData = studentRecord
+            ? {
+                ...studentRecord,
+                id: studentRecord.id || studentId || null,
+                nome: studentRecord.nome || studentName,
+                turma: studentRecord.turma || '',
+            }
+            : fallbackStudent;
+
+        return this.getStudentCountsFromSummary(summary, studentData);
+    }
+
+    async syncStudentInfractionCount(studentId, studentName, options = {}) {
+        const { infractions = null } = options;
+        try {
+            const list = infractions || await this.getAllInfractions();
+            const total = list.filter((inf) => {
+                if (studentId && inf.studentId) {
+                    return inf.studentId === studentId;
+                }
+                return inf.aluno === studentName;
+            }).length;
+
+            if (this.isDemoMode) {
+                const studentRecord = this.findStudentByName(studentName);
+                if (studentRecord) {
+                    studentRecord.infracoes = total;
+                }
+                return total;
+            }
+
+            const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
+            if (!ownerId || !this.database) {
+                return total;
+            }
+
+            if (studentId) {
+                await this.database.ref(`users/${ownerId}/students/${studentId}/infracoes`).set(total);
+            } else if (studentName) {
+                const studentsRef = this.database.ref(`users/${ownerId}/students`);
+                const snapshot = await studentsRef.orderByChild('nome').equalTo(studentName).once('value');
+                snapshot.forEach((child) => {
+                    child.ref.child('infracoes').set(total);
+                });
+            }
+
+            return total;
+        } catch (error) {
+            console.warn('⚠️ Não foi possível sincronizar contador de infrações do aluno:', error);
+            return null;
+        }
+    }
+
+    async afterInfractionSaved({ studentId, studentName, severity }) {
+        if (!studentName) return;
+        try {
+            const infractions = await this.getAllInfractions();
+            await this.syncStudentInfractionCount(studentId, studentName, { infractions });
+            this.invalidateInfractionSummary();
+            const result = await this.updateSuspensionCounters({ id: studentId, name: studentName }, severity);
+            if (result && result.shouldSuggest) {
+                const summary = await this.getInfractionSummaryForStudent(studentId, studentName);
+                this.openSuspensionModal({
+                    studentId,
+                    studentName,
+                    trackerKey: result.key,
+                    tracker: result.tracker,
+                    reason: result.reason,
+                    suggestedDuration: result.suggestedDuration,
+                    severitySummary: summary,
+                    automatic: true,
+                });
+            }
+        } catch (error) {
+            console.warn('⚠️ Não foi possível processar os impactos da infração:', error);
+        }
+    }
+
+    async refreshSuspensionCountersForStudent(studentId, studentName, options = {}) {
+        if (!studentName) return null;
+        const { summary: aggregatedSummary = null, studentRecord = null } = options || {};
+        const severitySummary = await this.getInfractionSummaryForStudent(studentId, studentName, {
+            summary: aggregatedSummary,
+            studentRecord,
+        });
+        const key = this.getStudentStorageKey(studentId, studentName);
+        if (!key) {
+            return { summary: severitySummary, tracker: null, key: null };
+        }
+        const tracker = await this.fetchSuspensionTracker(key, { studentId, studentName });
+        tracker.leveCount = severitySummary?.leve || 0;
+        tracker.mediaCount = severitySummary?.media || 0;
+        tracker.graveCount = severitySummary?.grave || 0;
+        tracker.studentId = tracker.studentId || studentId || null;
+        tracker.studentName = tracker.studentName || studentName || '';
+        tracker.className = severitySummary?.className || tracker.className || '';
+
+        if (tracker.awaitingReport) {
+            const trigger = this.evaluateSuspensionTrigger(tracker);
+            if (!trigger.shouldSuggest) {
+                tracker.awaitingReport = false;
+                tracker.triggerReason = '';
+                tracker.suggestedDuration = null;
+                tracker.lastTriggeredAt = null;
+            }
+        }
+
+        await this.saveSuspensionTracker(key, tracker);
+        return { summary: severitySummary, tracker, key };
+    }
+
+    async processSuspensionRefreshResult({ refreshResult, studentId, studentName, allowModal = true }) {
+        if (!refreshResult || !refreshResult.tracker || !refreshResult.key) {
+            return false;
+        }
+
+        const { tracker, key, summary } = refreshResult;
+        const trigger = this.evaluateSuspensionTrigger(tracker);
+
+        if (!trigger.shouldSuggest) {
+            if (tracker.awaitingReport || tracker.triggerReason || tracker.suggestedDuration) {
+                const resetTracker = {
+                    ...tracker,
+                    awaitingReport: false,
+                    triggerReason: '',
+                    suggestedDuration: null,
+                    lastTriggeredAt: null,
+                    history: Array.isArray(tracker.history) ? [...tracker.history] : [],
+                };
+                await this.saveSuspensionTracker(key, resetTracker);
+            }
+            return false;
+        }
+
+        const trackerData = {
+            ...tracker,
+            studentId: tracker.studentId || studentId || null,
+            studentName: tracker.studentName || studentName || '',
+            className: tracker.className || summary?.className || '',
+            awaitingReport: true,
+            triggerReason: trigger.reason,
+            suggestedDuration: trigger.suggestedDuration,
+            lastTriggeredAt: Date.now(),
+            history: Array.isArray(tracker.history) ? [...tracker.history] : [],
+        };
+
+        await this.saveSuspensionTracker(key, trackerData);
+
+        if (!allowModal) {
+            return false;
+        }
+
+        this.openSuspensionModal({
+            studentId,
+            studentName,
+            trackerKey: key,
+            tracker: trackerData,
+            reason: trackerData.triggerReason || trigger.reason,
+            suggestedDuration: trackerData.suggestedDuration || trigger.suggestedDuration,
+            severitySummary: summary,
+            automatic: true,
+        });
+
+        return true;
+    }
+
+    getSuspensionSummaryMarkup(summary) {
+        if (!summary) {
+            return '<p class="suspension-summary">Sem infrações registradas.</p>';
+        }
+        const items = [
+            { label: 'Infrações leves', value: summary.leve || 0 },
+            { label: 'Infrações médias', value: summary.media || 0 },
+            { label: 'Infrações graves', value: summary.grave || 0 },
+            { label: 'Total registrado', value: summary.total || 0 },
+        ];
+        const list = items.map(item => `<li><span>${item.label}:</span> <strong>${item.value}</strong></li>`).join('');
+        return `<ul class="suspension-summary">${list}</ul>`;
+    }
+
+    buildSuspensionLetter({ studentName, className, reason, durationDays, summary }) {
+        const durationLabel = durationDays === 1 ? '1 dia' : `${durationDays} dias`;
+        const turmaLabel = className ? `, da turma ${className}` : '';
+        const leve = summary?.leve || 0;
+        const media = summary?.media || 0;
+        const grave = summary?.grave || 0;
+        return [
+            `Prezada família de ${studentName}${turmaLabel},`,
+            '',
+            `Comunicamos que, após análise das ocorrências disciplinares registradas (${leve} leve(s), ${media} média(s) e ${grave} grave(s)), ${reason.toLowerCase()}.`,
+            `Diante desse cenário, recomendamos a aplicação de suspensão por ${durationLabel}, com início imediato após o recebimento deste comunicado.`,
+            '',
+            'Solicitamos que a família acompanhe o(a) estudante neste período, reforçando as orientações de convivência, respeito e responsabilidade, alinhadas ao regimento escolar.',
+            '',
+            'Durante a suspensão, disponibilizaremos as atividades pedagógicas necessárias para que não haja prejuízo acadêmico. Ao retornar, o(a) estudante passará por uma conversa de reorientação com a coordenação.',
+            '',
+            'Agradecemos o apoio e colocamo-nos à disposição para esclarecimentos.',
+        ].join('\n');
+    }
+
+    async generateSuspensionPdf({ studentName, className, reason, durationDays, letterText, summary }) {
+        try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            const pageWidth = doc.internal.pageSize.getWidth();
+            const margin = 20;
+            let y = 20;
+
+            if (this.config.reportHeader) {
+                doc.setFontSize(12);
+                doc.text(this.config.reportHeader, margin, y, { maxWidth: pageWidth - margin * 2 });
+                y += 10;
+            }
+
+            doc.setFontSize(18);
+            doc.text('Comunicado de Suspensão', pageWidth / 2, y, { align: 'center' });
+            y += 14;
+
+            doc.setFontSize(12);
+            const studentLine = `Aluno: ${studentName}${className ? ` | Turma: ${className}` : ''}`;
+            doc.text(studentLine, margin, y);
+            y += 8;
+            doc.text(`Motivo: ${reason}`, margin, y);
+            y += 8;
+            doc.text(`Duração sugerida: ${durationDays === 1 ? '1 dia' : `${durationDays} dias`}`, margin, y);
+            y += 12;
+
+            const letterLines = doc.splitTextToSize(letterText, pageWidth - margin * 2);
+            doc.text(letterLines, margin, y);
+            y += letterLines.length * 6 + 10;
+
+            const summaryLines = [
+                `Resumo de infrações: Leves ${summary?.leve || 0}, Médias ${summary?.media || 0}, Graves ${summary?.grave || 0}`,
+                `Total acumulado: ${summary?.total || 0}`,
+            ];
+            doc.setFontSize(11);
+            doc.text(summaryLines, margin, y);
+            y += summaryLines.length * 6 + 10;
+
+            const signatures = [
+                { label: 'Família/Responsável' },
+                { label: 'Aluno(a)' },
+                { label: 'Coordenação' },
+                { label: 'Direção' },
+            ];
+
+            const columnWidth = (pageWidth - margin * 2) / signatures.length;
+            doc.setDrawColor(0);
+            signatures.forEach((sig, index) => {
+                const x = margin + index * columnWidth;
+                doc.line(x, y, x + columnWidth - 5, y);
+                doc.text(sig.label, x + (columnWidth - 5) / 2, y + 6, { align: 'center' });
+            });
+
+            const fileName = `suspensao-${studentName.replace(/\s+/g, '-')}-${Date.now()}.pdf`;
+            doc.save(fileName);            
+        } catch (error) {
+            console.error('❌ Erro ao gerar PDF de suspensão:', error);
+            this.showToast('Não foi possível gerar o PDF da suspensão.', 'error');
+        }
+    }
+
+   openSuspensionModal({ studentId, studentName, trackerKey, tracker, reason, suggestedDuration, severitySummary, automatic }) {
+        const modal = document.getElementById('suspensionModal');
+        if (!modal) return;
+
+        const studentNameEl = document.getElementById('suspensionStudentName');
+        const reasonEl = document.getElementById('suspensionReason');
+        const countsEl = document.getElementById('suspensionCounts');
+        const letterField = document.getElementById('suspensionLetterText');
+        const durationSelect = document.getElementById('suspensionDuration');
+
+        const className = severitySummary?.className || tracker?.className || '';
+        if (studentNameEl) studentNameEl.textContent = studentName;
+        if (reasonEl) reasonEl.textContent = reason || 'Suspensão recomendada.';
+        if (countsEl) countsEl.innerHTML = this.getSuspensionSummaryMarkup(severitySummary);
+
+        const durationValue = suggestedDuration || EducaFlowPro.determineSuspensionDuration(tracker?.issuedSuspensions || 0);
+        if (durationSelect) {
+            const value = String(durationValue);
+            if (![...durationSelect.options].some(opt => opt.value === value)) {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = `${durationValue} dia${durationValue > 1 ? 's' : ''}`;
+                durationSelect.appendChild(option);
+            }
+            durationSelect.value = value;
+        }
+       
+       const letter = this.buildSuspensionLetter({
+            studentName,
+            className,
+            reason: reason || 'Infrações recorrentes registradas',
+            durationDays: durationValue,
+            summary: severitySummary,
+        });
+        if (letterField) {
+            letterField.value = letter;
+        }
+
+        this.pendingSuspensionSuggestion = {
+            studentId,
+            studentName,
+            trackerKey: trackerKey || this.getStudentStorageKey(studentId, studentName),
+            tracker,
+            reason,
+            suggestedDuration: durationValue,
+            severitySummary,
+            automatic: Boolean(automatic),
+        };
+
+        modal.classList.remove('hidden');
+    }
+
+   closeSuspensionModal() {
+        const modal = document.getElementById('suspensionModal');
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+        this.resetSuspensionModal();
+    }
+
+    resetSuspensionModal() {
+        const reasonEl = document.getElementById('suspensionReason');
+        if (reasonEl) reasonEl.textContent = '';
+        const countsEl = document.getElementById('suspensionCounts');
+        if (countsEl) countsEl.innerHTML = '';
+        const letterField = document.getElementById('suspensionLetterText');
+        if (letterField) letterField.value = '';
+        const durationSelect = document.getElementById('suspensionDuration');
+        if (durationSelect) durationSelect.value = '1';
+        this.pendingSuspensionSuggestion = null;
+    }
+
+    async confirmSuspensionGeneration() {
+        if (!this.pendingSuspensionSuggestion) {
+            this.showToast('Nenhuma suspensão selecionada.', 'warning');
+            return;
+        }
+
+        const letterField = document.getElementById('suspensionLetterText');
+        const durationSelect = document.getElementById('suspensionDuration');
+        const letterText = letterField ? letterField.value.trim() : '';
+        if (!letterText) {
+            this.showToast('Escreva o texto do comunicado antes de gerar a suspensão.', 'error');
+            return;
+        }
+        const durationDays = durationSelect ? Number(durationSelect.value) || this.pendingSuspensionSuggestion.suggestedDuration : this.pendingSuspensionSuggestion.suggestedDuration;
+
+        await this.finalizeSuspension({
+            ...this.pendingSuspensionSuggestion,
+            durationDays,
+            letterText,
+        });
+    }
+
+    async finalizeSuspension({ studentId, studentName, trackerKey, tracker, reason, durationDays, letterText, severitySummary, automatic }) {
+        try {
+            const key = trackerKey || this.getStudentStorageKey(studentId, studentName);
+            let trackerData = tracker || await this.fetchSuspensionTracker(key, { studentId, studentName });
+            trackerData = this.normalizeSuspensionTracker(trackerData, { studentId, studentName });
+            trackerData.leveCount = 0;
+            trackerData.mediaCount = 0;
+            trackerData.graveCount = 0;
+            trackerData.awaitingReport = false;
+            trackerData.triggerReason = '';
+            trackerData.suggestedDuration = durationDays;
+            trackerData.lastTriggeredAt = null;
+            trackerData.issuedSuspensions = (trackerData.issuedSuspensions || 0) + 1;
+            trackerData.history = trackerData.history || [];
+            trackerData.history.push({
+                generatedAt: Date.now(),
+                durationDays,
+                reason,
+                automatic: Boolean(automatic),
+            });
+
+            await this.saveSuspensionTracker(key, trackerData);
+
+            if (this.isDemoMode) {
+                if (!this.demoData.suspensions) {
+                    this.demoData.suspensions = [];
+                }
+                this.demoData.suspensions.push({
+                    studentId,
+                    studentName,
+                    durationDays,
+                    reason,
+                    letterText,
+                    createdAt: Date.now(),
+                    automatic: Boolean(automatic),
+                });
+            } else {
+                const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
+                if (ownerId && this.database) {
+                    const recordRef = this.database.ref(`users/${ownerId}/suspensions/${key}`).push();
+                    await recordRef.set({
+                        studentId,
+                        studentName,
+                        durationDays,
+                        reason,
+                        letterText,
+                        automatic: Boolean(automatic),
+                        createdAt: firebase.database.ServerValue.TIMESTAMP,
+                    });
+                }
+            }
+
+            await this.generateSuspensionPdf({
+                studentName,
+                className: severitySummary?.className || '',
+                reason: reason || 'Suspensão recomendada',
+                durationDays,
+                letterText,
+                summary: severitySummary,;
+            });
+
+            this.showToast('Suspensão gerada com sucesso.', 'success');
+        } catch (error) {
+            console.error('❌ Erro ao registrar suspensão:', error);
+            this.showToast('Erro ao registrar a suspensão.', 'error');
+        } finally {
+            this.closeSuspensionModal();
+        }
+        }
+
+    async openManualSuspensionModal() {
+        const select = document.getElementById('studentForSuspension');
+        if (!select || !select.value) {
+            this.showToast('Selecione um aluno para gerar a suspensão.', 'warning');
+            return;
+        }
+        const studentName = select.value;
+        const studentRecord = await this.findStudentDataByName(studentName);
+        const studentId = studentRecord ? studentRecord.id : null;
+        const summary = await this.getInfractionSummaryForStudent(studentId, studentName);
+        const key = this.getStudentStorageKey(studentId, studentName);
+        const tracker = await this.fetchSuspensionTracker(key, { studentId, studentName });
+        const suggestedDuration = tracker.awaitingReport && tracker.suggestedDuration
+            ? tracker.suggestedDuration
+            : EducaFlowPro.determineSuspensionDuration(tracker.issuedSuspensions || 0);
+        const reason = tracker.triggerReason
+            || 'Solicitação manual de suspensão com base no histórico registrado.';
+        this.openSuspensionModal({
+            studentId,
+            studentName,
+            trackerKey: key,
+            tracker,
+            reason,
+            suggestedDuration,
+            severitySummary: summary,
+            automatic: false,
+        });
+    }
+
     /**
      * Filtra infrações por nome do aluno.
      * @param {string} studentName Nome do aluno
@@ -3033,7 +4003,7 @@ class EducaFlowPro {
             return;
         }
         try {
-            const email = this.currentUser.email || '';
+           const email = this.currentUser.email || '';
             const name = this.currentUser.displayName || '';
             const uid = this.currentUser.uid;
             const emailKey = email ? email.replace(/\./g, ',') : null;
@@ -3477,8 +4447,10 @@ class EducaFlowPro {
                 await this.database.ref(`users/${ownerId}/students/${id}`).remove();
             }
             
+            this.invalidateInfractionSummary();
             await this.loadStudents();
             await this.loadStatistics();
+            await this.createHeatmaps();
             this.populateAllSelects();
             this.showToast('Aluno excluído com sucesso!', 'success');
             
@@ -3496,16 +4468,52 @@ class EducaFlowPro {
         if (!confirm('Tem certeza que deseja excluir esta infração?')) return;
         
         try {
+            let removedInfraction = null;
+            
             if (this.isDemoMode) {
-                this.demoData.infractions = this.demoData.infractions.filter(inf => inf.id !== id);
+                const idx = this.demoData.infractions.findIndex(inf => inf.id === id);
+                if (idx >= 0) {
+                    removedInfraction = { ...this.demoData.infractions[idx] };
+                    this.demoData.infractions.splice(idx, 1);
+                }
             } else {
-                // Exclui a infração do path compartilhado do proprietário dos dados
                 const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
-                await this.database.ref(`users/${ownerId}/infractions/${id}`).remove();
+                               const infractionRef = this.database.ref(`users/${ownerId}/infractions/${id}`);
+                const snapshot = await infractionRef.once('value');
+                removedInfraction = snapshot.exists() ? { id, ...snapshot.val() } : null;
+                await infractionRef.remove();
             }
             
-            await this.loadInfractions();
-            await this.loadStatistics();
+            this.invalidateInfractionSummary();
+            const summary = await this.getInfractionsSummary({ forceRefresh: true });
+            const infractionsForSync = Array.isArray(summary?.rawInfractions) ? summary.rawInfractions : null;
+
+            if (removedInfraction) {
+                const removedStudentName = removedInfraction.aluno || '';
+                const removedStudentId = removedInfraction.studentId || null;
+                if (removedStudentName) {
+                    const syncPayload = infractionsForSync ? { infractions: infractionsForSync } : {};
+                    await this.syncStudentInfractionCount(removedStudentId, removedStudentName, syncPayload);
+
+                    const refreshResult = await this.refreshSuspensionCountersForStudent(removedStudentId, removedStudentName, { summary });
+                    await this.processSuspensionRefreshResult({
+                        refreshResult,
+                        studentId: removedStudentId,
+                        studentName: removedStudentName,
+                        allowModal: false,
+                    });
+                }
+            }
+
+            await Promise.all([
+                this.loadInfractions(),
+                this.loadStudents(),
+                this.loadClasses(),
+                this.loadStatistics(),
+                this.createHeatmaps(),
+            ]);
+
+            this.populateAllSelects();
             this.showToast('Infração excluída com sucesso!', 'success');
             
         } catch (error) {
@@ -3729,10 +4737,12 @@ class EducaFlowPro {
             const headerEl = document.getElementById('studentModal').querySelector('.modal__header h3');
             if (headerEl) headerEl.textContent = 'Cadastrar Novo Aluno';
             // Recarregar dados
+            this.invalidateInfractionSummary();
             await this.loadStudents();
             await this.loadClasses();
             await this.loadInfractions();
             await this.loadStatistics();
+            await this.createHeatmaps();
             this.populateAllSelects();
             this.showToast('Aluno atualizado com sucesso!', 'success');
         } catch (error) {
@@ -3871,7 +4881,6 @@ class EducaFlowPro {
      */
     async updateInfraction() {
         const id = this.editingInfractionId;
-        // Campos
         const student = document.getElementById('infractionStudent').value;
         const type = document.getElementById('infractionType').value;
         const severity = document.getElementById('infractionSeverity').value;
@@ -3881,6 +4890,7 @@ class EducaFlowPro {
         const responsibleName = document.getElementById('responsibleName').value;
         const description = document.getElementById('infractionDescription').value;
         const measures = document.getElementById('infractionMeasures').value;
+        
         if (!id) return;
         if (!student || !type || !severity || !date || !time || !description) {
             this.showToast('Preencha todos os campos obrigatórios', 'error');
@@ -3890,8 +4900,8 @@ class EducaFlowPro {
             this.showToast('Digite o nome do responsável', 'error');
             return;
         }
+        
         try {
-            // Encontrar dados do aluno para obter turma e ID
             let turma = 'N/A';
             let studentId = null;
             try {
@@ -3905,58 +4915,106 @@ class EducaFlowPro {
             } catch (e) {
                 console.error('Erro ao obter dados do aluno:', e);
             }
+            
             const responsible = responsibleName || 'Não informado';
+            const payload = {
+                aluno: student,
+                tipo: type,
+                gravidade: severity,
+                data: date,
+                horario: time,
+                responsavelTipo: responsibleType,
+                responsavel: responsible,
+                descricao: description,
+                medidas: measures,
+                turma: turma,
+                studentId: studentId,
+            };
+
+            let previousInfraction = null;
             if (this.isDemoMode) {
                 const idx = this.demoData.infractions.findIndex(i => i.id === id);
                 if (idx >= 0) {
-                    this.demoData.infractions[idx] = {
-                        ...this.demoData.infractions[idx],
-                        aluno: student,
-                        tipo: type,
-                        gravidade: severity,
-                        data: date,
-                        horario: time,
-                        responsavelTipo: responsibleType,
-                        responsavel: responsible,
-                        descricao: description,
-                        medidas: measures,
-                        turma: turma,
-                        studentId: studentId
-                    };
+                    previousInfraction = { ...this.demoData.infractions[idx] };
+                    const updatedInfraction = { ...this.demoData.infractions[idx], ...payload };
+                    this.demoData.infractions[idx] = updatedInfraction;
                 }
             } else {
                 const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
-                await this.database.ref(`users/${ownerId}/infractions/${id}`).update({
-                    aluno: student,
-                    tipo: type,
-                    gravidade: severity,
-                    data: date,
-                    horario: time,
-                    responsavelTipo: responsibleType,
-                    responsavel: responsible,
-                    descricao: description,
-                    medidas: measures,
-                    turma: turma,
-                    studentId: studentId
-                });
+                const infractionRef = this.database.ref(`users/${ownerId}/infractions/${id}`);
+                const snapshot = await infractionRef.once('value');
+                previousInfraction = snapshot.exists() ? { id, ...snapshot.val() } : null;
+                await infractionRef.update(payload);
             }
-            // Resetar modal e flags
+           
             this.editingInfractionId = null;
             const modal = document.getElementById('infractionModal');
-            modal.classList.add('hidden');
-            document.getElementById('infractionForm').reset();
-            // Restaurar título padrão
-            const header = modal.querySelector('.modal__header h3');
-            if (header) header.textContent = 'Registrar Nova Infração';
-            document.getElementById('responsibleDetails').classList.add('hidden');
-            // Recarregar dados
-            await this.loadInfractions();
-            await this.loadStudents();
-            await this.loadClasses();
-            await this.loadStatistics();
+            if (modal) {
+                modal.classList.add('hidden');
+                const header = modal.querySelector('.modal__header h3');
+                if (header) header.textContent = 'Registrar Nova Infração';
+            }
+            const form = document.getElementById('infractionForm');
+            if (form) form.reset();
+            const details = document.getElementById('responsibleDetails');
+            if (details) details.classList.add('hidden');
+
+            this.invalidateInfractionSummary();
+            const summary = await this.getInfractionsSummary({ forceRefresh: true });
+            const infractionsForSync = Array.isArray(summary?.rawInfractions) ? summary.rawInfractions : null;
+
+            if (student) {
+                const syncPayload = infractionsForSync ? { infractions: infractionsForSync } : {};
+                await this.syncStudentInfractionCount(studentId, student, syncPayload);
+            }
+
+            const previousStudentName = previousInfraction?.aluno || '';
+            const previousStudentId = previousInfraction?.studentId || null;
+            const studentChanged = Boolean(previousInfraction)
+                && (previousStudentId !== studentId || previousStudentName !== student);
+
+            if (studentChanged && previousStudentName) {
+                const syncPayload = infractionsForSync ? { infractions: infractionsForSync } : {};
+                await this.syncStudentInfractionCount(previousStudentId, previousStudentName, syncPayload);
+            }
+
+            const currentRefreshPromise = student
+                ? this.refreshSuspensionCountersForStudent(studentId, student, { summary })
+                : Promise.resolve(null);
+            const previousRefreshPromise = studentChanged && previousStudentName
+                ? this.refreshSuspensionCountersForStudent(previousStudentId, previousStudentName, { summary })
+                : Promise.resolve(null);
+
+            const [currentRefresh, previousRefresh] = await Promise.all([currentRefreshPromise, previousRefreshPromise]);
+
+            if (currentRefresh) {
+                await this.processSuspensionRefreshResult({
+                    refreshResult: currentRefresh,
+                    studentId,
+                    studentName: student,
+                    allowModal: true,
+                });
+            }
+
+            if (previousRefresh) {
+                await this.processSuspensionRefreshResult({
+                    refreshResult: previousRefresh,
+                    studentId: previousStudentId,
+                    studentName: previousStudentName,
+                    allowModal: false,
+                });
+            }
+
+            await Promise.all([
+                this.loadInfractions(),
+                this.loadStudents(),
+                this.loadClasses(),
+                this.loadStatistics(),
+                this.createHeatmaps(),
+            ]);
+            
             this.populateAllSelects();
             this.showToast('Infração atualizada com sucesso!', 'success');
-            // Reavaliar a descrição com IA
             await this.analyzeInfractionText(description);
         } catch (error) {
             console.error('Erro ao atualizar infração:', error);
