@@ -495,6 +495,16 @@
                         <p>Infrações no período selecionado com análise temporal</p>
                         <button class="btn btn--secondary" onclick="generatePeriodReport()">📅 Gerar por Período</button>
                     </div>
+                    <div class="report-card">
+                        <h3>🚨 Suspensão do Aluno</h3>
+                        <p>Gera comunicado formal de suspensão conforme as regras de reincidência</p>
+                        <div class="report-actions">
+                            <select class="form-control" id="studentForSuspension">
+                                <option value="">Selecione o aluno</option>
+                            </select>
+                            <button class="btn btn--danger" onclick="app.openManualSuspensionModal()">🚨 Gerar Suspensão</button>
+                        </div>
+                    </div>
                 </div>
             </div>
             <!-- Settings Tab -->
@@ -771,6 +781,36 @@ A EDUCAÇÃO é um processo colaborativo que exige a PARCERIA ATIVA entre escola
                 <button class="btn btn--outline" id="cancelInfractionSelectionBtn">Cancelar</button>
                 <button class="btn btn--secondary" id="generateGeneralStudentReportBtn">Histórico Completo</button>
                 <button class="btn btn--primary" id="confirmInfractionSelectionBtn">Gerar Advertência</button>
+            </div>
+        </div>
+    </div>
+
+     <div id="suspensionModal" class="modal hidden">
+        <div class="modal__content">
+            <div class="modal__header">
+                <h3>🚨 Sugerir Suspensão</h3>
+                <button class="modal__close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <p class="modal__subtitle"><strong id="suspensionStudentName"></strong></p>
+                <p class="modal__description" id="suspensionReason"></p>
+                <div id="suspensionCounts"></div>
+                <div class="form-group">
+                    <label class="form-label" for="suspensionDuration">Duração sugerida</label>
+                    <select id="suspensionDuration" class="form-control">
+                        <option value="1">1 dia</option>
+                        <option value="3">3 dias</option>
+                        <option value="5">5 dias</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="suspensionLetterText">Texto do comunicado</label>
+                    <textarea id="suspensionLetterText" class="form-control" rows="6" placeholder="Descreva o comunicado para a família"></textarea>
+                </div>
+            </div>
+            <div class="modal__footer">
+                <button class="btn btn--outline" id="cancelSuspensionBtn">Cancelar</button>
+                <button class="btn btn--danger" id="generateSuspensionBtn">🚨 Gerar Suspensão</button>
             </div>
         </div>
     </div>
