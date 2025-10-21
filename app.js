@@ -16,8 +16,13 @@
 const EDUCAFLOW_LOGO_DATA_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABAAAAAQACAIAAADwf7zUAACv4mNhQlgAAK/ianVtYgAAAB5qdW1kYzJwYQARABCAAACqADibcQNjMnBhAAAANvtqdW1iAAAAR2p1bWRjMm1hABEAEIAAAKoAOJtxA3VybjpjMnBhOjY2ZDc1ZjI1LTZkYTItNDIwYy1iNjM5LTIxYmE2NDkwMmQ1NgAAAAHBanVtYgAAAClqdW1kYzJhcwARABCAAACqADibcQNjMnBhLmFzc2VydGlvbnMAAAAA5Wp1bWIAAAApanVtZGNib3IAEQAQgAAAqgA4m3EDYzJwYS5hY3Rpb25zLnYyAAAAALRjYm9yoWdhY3Rpb25zgqNmYWN0aW9ubGMycGEuY3JlYXRlZG1zb2Z0d2FyZUFnZW50v2RuYW1lZkdQVC00b/9xZGlnaXRhbFNvdXJjZVR5cGV4Rmh0dHA6Ly9jdi5pcHRjLm9yZy9uZXdzY29kZXMvZGlnaXRhbHNvdXJjZXR5cGUvdHJhaW5lZEFsZ29yaXRobWljTWVkaWGhZmFjdGlvbm5jMnBhLmNvbnZlcnRlZAAAAKtqdW1iAAAAKGp1bWRjYm9yABEAEIAAAKoAOJtxA2MycGEuaGFzaC5kYXRhAAAAAHtjYm9ypWpleGNsdXNpb25zgaJlc3RhcnQYIWZsZW5ndGgZNy1kbmFtZW5qdW1iZiBtYW5pZmVzdGNhbGdmc2hhMjU2ZGhhc2hYIPH+oB+0IU0Ypto3NbVNVNXmd3MqY55gLoja/Kt5V5w3Y3BhZEgAAAAAAAAAAAAAAe5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAABv2Nib3Kmamluc3RhbmNlSUR4LHhtcDppaWQ6MjU0OTQ0Y2YtNWY4ZS00MDFkLWJhY2UtNTA0ODBlNmZkYjBidGNsYWltX2dlbmVyYXRvcl9pbmZvv2RuYW1lZ0NoYXRHUFR3b3JnLmNvbnRlbnRhdXRoLmMycGFfcnNmMC42Ny4x/2lzaWduYXR1cmV4TXNlbGYjanVtYmY9L2MycGEvdXJuOmMycGE6NjZkNzVmMjUtNmRhMi00MjBjLWI2MzktMjFiYTY0OTAyZDU2L2MycGEuc2lnbmF0dXJlcmNyZWF0ZWRfYXNzZXJ0aW9uc4KiY3Vy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';
 
 class EducaFlowPro {
-    constructor() {
+    constructor(options = {}) {
         console.log('🚀 Iniciando EducaFlow Pro v2.0...');
+        this.options = options;
+        this.forceRedirectLogin = Boolean(options.forceRedirect);
+        this.sessionStorageOverride = options.sessionStorage || null;
+        this._cachedSessionStorage = undefined;
+        this.redirectStorageKey = 'redirectInProgress';
         this.currentUser = null;
         this.database = null;
         this.auth = null;
@@ -131,7 +136,126 @@ class EducaFlowPro {
         this.filterPresets = [];
         this.currentFilters = {};
         
-        this.init();
+        if (options.autoInit !== false) {
+            this.init();
+        }
+    }
+
+    getSessionStorage() {
+        if (this.sessionStorageOverride) {
+            return this.sessionStorageOverride;
+        }
+
+        if (this._cachedSessionStorage !== undefined) {
+            return this._cachedSessionStorage;
+        }
+
+        try {
+            this._cachedSessionStorage = window.sessionStorage;
+        } catch (error) {
+            console.warn('⚠️ SessionStorage indisponível:', error);
+            this._cachedSessionStorage = null;
+        }
+
+        return this._cachedSessionStorage;
+    }
+
+    setRedirectInProgress() {
+        const storage = this.getSessionStorage();
+        if (!storage) return false;
+        try {
+            storage.setItem(this.redirectStorageKey, 'true');
+            return true;
+        } catch (error) {
+            console.warn('⚠️ Não foi possível registrar redirect em andamento:', error);
+            return false;
+        }
+    }
+
+    clearRedirectInProgress() {
+        const storage = this.getSessionStorage();
+        if (!storage) return false;
+        try {
+            storage.removeItem(this.redirectStorageKey);
+            return true;
+        } catch (error) {
+            console.warn('⚠️ Não foi possível limpar flag de redirect:', error);
+            return false;
+        }
+    }
+
+    isRedirectInProgress() {
+        const storage = this.getSessionStorage();
+        if (!storage) return false;
+        try {
+            return storage.getItem(this.redirectStorageKey) === 'true';
+        } catch (error) {
+            console.warn('⚠️ Não foi possível ler flag de redirect:', error);
+            return false;
+        }
+    }
+
+    shouldUseRedirectLogin() {
+        if (this.forceRedirectLogin) {
+            return true;
+        }
+
+        try {
+            const ua = (navigator?.userAgent || '').toLowerCase();
+            const isFirefox = ua.includes('firefox');
+            const isMobile = /mobile|iphone|ipad|android/.test(ua);
+            const isBrave = ua.includes('brave') || typeof navigator?.brave !== 'undefined';
+            return isFirefox || isMobile || isBrave;
+        } catch (error) {
+            console.warn('⚠️ Não foi possível detectar o navegador para decidir o fluxo de login:', error);
+            return false;
+        }
+    }
+
+    hideLoginError() {
+        const loginError = document.getElementById('loginError');
+        if (loginError) {
+            loginError.classList.add('hidden');
+        }
+    }
+
+    showLoginError(message) {
+        const loginError = document.getElementById('loginError');
+        if (!loginError) return;
+
+        const messageTarget = loginError.querySelector('p') || loginError;
+        if (message) {
+            messageTarget.textContent = message;
+        }
+        loginError.classList.remove('hidden');
+    }
+
+    getFriendlyLoginError(error) {
+        const defaultMessage = 'Erro ao fazer login. Verifique sua conexão e tente novamente.';
+        if (!error) return defaultMessage;
+
+        const code = error.code || '';
+        switch (code) {
+            case 'auth/unauthorized-domain':
+                return 'Domínio não autorizado no Firebase. Adicione o domínio do site às configurações de autenticação.';
+            case 'auth/network-request-failed':
+                return 'Não foi possível conectar aos servidores do Google. Verifique sua conexão com a internet.';
+            case 'auth/popup-blocked':
+                return 'O navegador bloqueou a janela de login. Libere pop-ups ou tente novamente usando outra aba/janela.';
+            case 'auth/popup-closed-by-user':
+                return 'O login foi cancelado antes de concluir. Clique em "Entrar com Google" para tentar novamente.';
+            case 'auth/cancelled-popup-request':
+                return 'Outra tentativa de login ainda está em andamento. Aguarde alguns instantes e tente novamente.';
+            case 'auth/operation-not-supported-in-this-environment':
+                return 'Este navegador exige redirecionamento para realizar o login. Recarregue a página e tente novamente.';
+            default: {
+                const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
+                if (message.includes('network')) {
+                    return 'Não foi possível conectar aos servidores do Google. Verifique sua conexão com a internet.';
+                }
+                return defaultMessage;
+            }
+        }
     }
 
     async init() {
@@ -177,13 +301,8 @@ class EducaFlowPro {
                 console.warn('⚠️ Erro ao obter resultado de redirect:', redirectError);
             } finally {
                 // Após processar o resultado do redirect, limpa a flag para permitir
-                // novos redirecionamentos em logins futuros. Sem essa remoção o usuário
-                // poderia ficar preso em um loop após a primeira tentativa.
-                try {
-                    sessionStorage.removeItem('redirectInProgress');
-                } catch (e) {
-                    // Ignora se sessionStorage não estiver disponível
-                }
+                // novos redirecionamentos em logins futuros.
+                this.clearRedirectInProgress();
             }
             
             this.isInitialized = true;
@@ -346,49 +465,74 @@ class EducaFlowPro {
 
     async attemptLogin() {
         const loginBtn = document.getElementById('googleLoginBtn');
-        const loginError = document.getElementById('loginError');
         const loginLoading = document.getElementById('loginLoading');
+
+        if (!loginBtn || !loginLoading) {
+            console.error('❌ Elementos de login não foram encontrados na interface.');
+            return;
+        }
 
         // Desabilita o botão e exibe o estado de carregamento
         loginBtn.disabled = true;
-        loginError.classList.add('hidden');
+        this.hideLoginError();
         loginLoading.classList.remove('hidden');
 
         try {
             console.log('🔐 Tentando login Google...');
-            // Detecta navegadores que bloqueiam pop-ups (Firefox, Brave, dispositivos móveis)
-            const ua = navigator.userAgent || '';
-            const isFirefox = ua.toLowerCase().includes('firefox');
-            const isMobile = /mobile|iphone|ipad|android/i.test(ua);
-            const isBrave = ua.toLowerCase().includes('brave');
-            if (isFirefox || isMobile || isBrave) {
-                console.log('🔁 Usando login via redirect para compatibilidade.');
-                // Para evitar loops infinitos em dispositivos móveis/brave/firefox, usa sessionStorage para
-                // registrar que o redirecionamento já foi iniciado. Caso a flag esteja presente, não inicia
-                // novo redirect até que getRedirectResult() seja processado e a flag removida no init().
-                if (!sessionStorage.getItem('redirectInProgress')) {
-                    sessionStorage.setItem('redirectInProgress', 'true');
-                    await this.auth.signInWithRedirect(this.googleProvider);
-                } else {
-                    console.warn('⚠️ Redirect já em andamento, aguardando resultado.');
-                }
-                return;
+            
+            if (!this.auth || !this.googleProvider) {
+                throw new Error('Firebase Auth não foi inicializado corretamente.');
             }
-            // Tenta login via pop-up por padrão
+
+            if (this.shouldUseRedirectLogin()) {
+                console.log('🔁 Usando login via redirect para compatibilidade.');
+                if (this.isRedirectInProgress()) {
+                    console.warn('⚠️ Redirect já em andamento, aguardando resultado.');
+                    return;
+            }
+            this.setRedirectInProgress();
+                await this.auth.signInWithRedirect(this.googleProvider);
+                return;
+            }  
+                       
             try {
                 const result = await this.auth.signInWithPopup(this.googleProvider);
-                console.log('✅ Login popup sucesso!', result.user.email);
+                const userEmail = result?.user?.email || 'usuário';
+                console.log('✅ Login popup sucesso!', userEmail);
                 this.showToast('Login realizado com sucesso!', 'success');
                 return;
             } catch (popupError) {
-                console.warn('❌ Popup falhou, usando redirect como fallback...', popupError);
-                await this.auth.signInWithRedirect(this.googleProvider);
-                return;
+               if (popupError?.code === 'auth/popup-closed-by-user' || popupError?.code === 'auth/cancelled-popup-request') {
+                    const message = this.getFriendlyLoginError(popupError);
+                    const toastType = popupError.code === 'auth/popup-closed-by-user' ? 'warning' : 'info';
+                    this.showLoginError(message);
+                    this.showToast(message, toastType);
+                    return;
+                }
+
+                if (popupError?.code === 'auth/unauthorized-domain') {
+                    throw popupError;
+                }
+
+                console.warn('❌ Popup falhou, tentando redirect como fallback...', popupError);
+                if (!this.isRedirectInProgress()) {
+                    this.setRedirectInProgress();
+                }
+
+                try {
+                    await this.auth.signInWithRedirect(this.googleProvider);
+                    return;
+                } catch (redirectError) {
+                    this.clearRedirectInProgress();
+                    throw redirectError;
+                }
             }
         } catch (error) {
+            this.clearRedirectInProgress();
             console.error('❌ Erro no login:', error);
-            loginError.classList.remove('hidden');
-            this.showToast('Erro no login. Verifique sua conexão e tente novamente.', 'error');
+            const message = this.getFriendlyLoginError(error);
+            this.showLoginError(message);
+            this.showToast(message, 'error');
             // Não ativa modo demo, apenas reabilita a tela de login após um pequeno atraso
             setTimeout(() => {
                 this.hideSplash();
@@ -755,7 +899,8 @@ class EducaFlowPro {
             console.error('❌ Erro ao carregar estatísticas:', error);
         }
     }
-      /**
+    
+     /**
      * Exibe detalhes sobre um indicador estatístico em um toast informativo.
      * Permite que o usuário compreenda como os KPIs são calculados e navegue
      * rapidamente para as seções relevantes do sistema.
@@ -4355,3 +4500,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('🚀 DOM carregado, iniciando EducaFlow Pro v2.0...');
     window.app = new EducaFlowPro();
 });
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { EducaFlowPro };
+}
