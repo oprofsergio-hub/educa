@@ -755,6 +755,74 @@ class EducaFlowPro {
             console.error('❌ Erro ao carregar estatísticas:', error);
         }
     }
+      /**
+     * Exibe detalhes sobre um indicador estatístico em um toast informativo.
+     * Permite que o usuário compreenda como os KPIs são calculados e navegue
+     * rapidamente para as seções relevantes do sistema.
+     *
+     * @param {string} statKey - Identificador do KPI (discipline, improvement ou engagement)
+     */
+    showStatDetails(statKey) {
+        const stats = this.currentKPIStats || {};
+        let message = '';
+
+        if (statKey === 'discipline') {
+            message = `Índice de Disciplina: ${stats.disciplineIndex ? stats.disciplineIndex.toFixed(0) : '--'}%\n` +
+                `Baseado em ${stats.totalStudents || 0} aluno(s) e ${stats.totalInfractions || 0} infração(ões) no total.\n` +
+                `Clique para ver todas as infrações registradas.`;
+            this.switchTab('infractions');
+        } else if (statKey === 'improvement') {
+            message = `Taxa de Melhoria: ${stats.improvementRate ? stats.improvementRate.toFixed(0) : '--'}%\n` +
+                `Calculada a partir de ${stats.monthInfractions || 0} infrações neste mês comparado a ${stats.totalInfractions || 0} no total.\n` +
+                `Clique para ver as infrações deste mês.`;
+            this.switchTab('infractions');
+        } else if (statKey === 'engagement') {
+            message = `Engajamento Familiar: ${stats.parentEngagement ? stats.parentEngagement.toFixed(0) : '--'}%\n` +
+                `Proporção de infrações acompanhadas pela coordenação ou direção sobre o total (${stats.totalInfractions || 0}).\n` +
+                `Clique para visualizar as infrações acompanhadas.`;
+            this.switchTab('infractions');
+        } else {
+            message = 'Indicador não reconhecido.';
+        }
+
+        this.showToast(message, 'info');
+    }
+
+    /**
+     * Adiciona mensagens informativas aos cartões da seção de estatísticas avançadas.
+     * Esse método é chamado após a atualização dos KPIs para manter a interatividade.
+     */
+    attachAdvancedStatsInfo() {
+        try {
+            const cards = document.querySelectorAll('.advanced-stats .stat-card');
+            cards.forEach(card => {
+                const titleEl = card.querySelector('h3');
+                if (!titleEl) return;
+
+                const title = titleEl.textContent || '';
+                card.style.cursor = 'pointer';
+                card.onclick = () => {
+                    if (title.includes('Gráfico de Tendências')) {
+                        this.showToast('O Gráfico de Tendências exibe a evolução das infrações ao longo do tempo. Para ver infrações específicas, utilize os filtros.', 'info');
+                    } else if (title.includes('Mapa de Calor - Horários')) {
+                        this.showToast('O Mapa de Calor por Horários mostra os períodos do dia com mais ocorrências de infrações.', 'info');
+                    } else if (title.includes('Mapa de Calor - Turmas')) {
+                        this.showToast('O Mapa de Calor por Turmas indica quais turmas apresentam maior incidência de infrações.', 'info');
+                    } else if (title.includes('Análise Comparativa')) {
+                        this.showToast('A Análise Comparativa permite comparar infrações por turno ou por turma. Ajuste os filtros para refinar a visualização.', 'info');
+                    } else if (title.includes('KPIs Educacionais')) {
+                        this.showStatDetails('discipline');
+                    } else if (title.includes('Calendário de Eventos')) {
+                        this.showToast('O Calendário de Eventos apresenta datas e quantidades de infrações registradas. Clique em um dia para analisar nos filtros.', 'info');
+                    } else {
+                        this.showToast('Estatística selecionada.', 'info');
+                    }
+                };
+            });
+        } catch (err) {
+            console.warn('⚠️ Erro ao atribuir handlers à seção avançada de estatísticas:', err);
+        }
+    }
 
     async loadStudents() {
         try {
@@ -3894,77 +3962,7 @@ function applyFilters() {
             return true;
         });
     }
-
-    /**
-     * Exibe detalhes sobre um indicador estatístico em um toast informativo.
-     * Isto permite ao usuário entender melhor como os KPIs são calculados e
-     * navegar para seções relevantes. Para KPIs de disciplina, melhoria e
-     * engajamento familiar, descreve o cálculo com base nos valores mais
-     * recentes obtidos em loadStatistics().
-     *
-     * @param {string} statKey Chave identificadora do KPI ('discipline', 'improvement' ou 'engagement')
-     */
-    showStatDetails(statKey) {
-        const stats = this.currentKPIStats || {};
-        let message = '';
-        if (statKey === 'discipline') {
-            message = `Índice de Disciplina: ${stats.disciplineIndex ? stats.disciplineIndex.toFixed(0) : '--'}%\n` +
-                `Baseado em ${stats.totalStudents || 0} aluno(s) e ${stats.totalInfractions || 0} infração(ões) no total.\n` +
-                `Clique para ver todas as infrações registradas.`;
-            // Direciona para a aba de infrações para análise detalhada
-            this.switchTab && this.switchTab('infractions');
-        } else if (statKey === 'improvement') {
-            message = `Taxa de Melhoria: ${stats.improvementRate ? stats.improvementRate.toFixed(0) : '--'}%\n` +
-                `Calculada a partir de ${stats.monthInfractions || 0} infrações neste mês comparado a ${stats.totalInfractions || 0} no total.\n` +
-                `Clique para ver as infrações deste mês.`;
-            this.switchTab && this.switchTab('infractions');
-        } else if (statKey === 'engagement') {
-            message = `Engajamento Familiar: ${stats.parentEngagement ? stats.parentEngagement.toFixed(0) : '--'}%\n` +
-                `Proporção de infrações acompanhadas pela coordenação ou direção sobre o total (${stats.totalInfractions || 0}).\n` +
-                `Clique para visualizar as infrações acompanhadas.`;
-            this.switchTab && this.switchTab('infractions');
-        } else {
-            message = 'Indicador não reconhecido.';
-        }
-        this.showToast(message, 'info');
-    }
-
-    /**
-     * Atribui informações pop-up ou navegação para os cartões dentro da seção
-     * avançada de estatísticas. Esse método é chamado após o carregamento
-     * das estatísticas para permitir interatividade.
-     */
-    attachAdvancedStatsInfo() {
-        try {
-            const cards = document.querySelectorAll('.advanced-stats .stat-card');
-            cards.forEach(card => {
-                const titleEl = card.querySelector('h3');
-                if (!titleEl) return;
-                const title = titleEl.textContent || '';
-                card.style.cursor = 'pointer';
-                card.onclick = () => {
-                    if (title.includes('Gráfico de Tendências')) {
-                        this.showToast('O Gráfico de Tendências exibe a evolução das infrações ao longo do tempo. Para ver infrações específicas, utilize os filtros.', 'info');
-                    } else if (title.includes('Mapa de Calor - Horários')) {
-                        this.showToast('O Mapa de Calor por Horários mostra os períodos do dia com mais ocorrências de infrações.', 'info');
-                    } else if (title.includes('Mapa de Calor - Turmas')) {
-                        this.showToast('O Mapa de Calor por Turmas indica quais turmas apresentam maior incidência de infrações.', 'info');
-                    } else if (title.includes('Análise Comparativa')) {
-                        this.showToast('A Análise Comparativa permite comparar infrações por turno ou por turma. Ajuste os filtros para refinar a visualização.', 'info');
-                    } else if (title.includes('KPIs Educacionais')) {
-                        this.showStatDetails('discipline');
-                    } else if (title.includes('Calendário de Eventos')) {
-                        this.showToast('O Calendário de Eventos apresenta datas e quantidades de infrações registradas. Clique em um dia para analisar nos filtros.', 'info');
-                    } else {
-                        this.showToast('Estatística selecionada.', 'info');
-                    }
-                };
-            });
-        } catch (err) {
-            console.warn('⚠️ Erro ao atribuir handlers à seção avançada de estatísticas:', err);
-        }
-    }
-
+   
     filterInfractions().then(filtered => {
         // Armazenar resultados para exportação
         window.filteredResults = filtered;
