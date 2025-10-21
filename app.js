@@ -141,6 +141,112 @@ class EducaFlowPro {
         }
     }
 
+        async safeRead(path, label = 'dados') {
+        if (!this.database) {
+            return { value: null, error: new Error('Firebase Database não inicializado') };
+        }
+
+        try {
+            const snapshot = await this.database.ref(path).once('value');
+            return { value: snapshot.val(), error: null };
+        } catch (error) {
+            const code = error?.code || error?.message || 'UNKNOWN';
+            const prefix = code === 'PERMISSION_DENIED' ? '⚠️' : '❌';
+            console[code === 'PERMISSION_DENIED' ? 'warn' : 'error'](
+                `${prefix} Falha ao ler ${label} (${path}):`,
+                error
+            );
+            return { value: null, error };
+        }
+    }
+
+    normalizePermissionRecord(record, defaults = {}) {
+        if (!record) return null;
+
+        const base = {
+            uid: defaults.uid || null,
+            email: defaults.email || null,
+            name: defaults.name || '',
+            permission: defaults.permission || 'user',
+            createdAt: Date.now()
+        };
+
+        if (typeof record === 'string') {
+            return {
+                ...base,
+                permission: record === 'admin' ? 'admin' : 'user'
+            };
+        }
+
+        if (typeof record === 'boolean') {
+            return {
+                ...base,
+                permission: record ? 'admin' : 'user'
+            };
+        }
+
+        if (typeof record === 'object') {
+            return {
+                uid: record.uid || base.uid,
+                email: record.email || base.email,
+                name: record.name || base.name,
+                permission: record.permission || base.permission,
+                createdAt: record.createdAt || base.createdAt
+            };
+        }
+
+        return null;
+    }
+
+    async fetchAllowedUser(key, defaults = {}) {
+        if (!key) {
+            return { record: null, raw: null, error: null };
+        }
+
+        const { value, error } = await this.safeRead(`settings/allowedUsers/${key}`, `usuário autorizado (${key})`);
+        if (!value) {
+            return { record: null, raw: null, error };
+        }
+
+        return {
+            record: this.normalizePermissionRecord(value, defaults),
+            raw: value,
+            error: null
+        };
+    }
+
+    async ensureOwnerId(defaultUid) {
+        if (!this.database) {
+            return { ownerId: defaultUid, wasClaimed: false };
+        }
+
+        const ownerIdRef = this.database.ref('settings/ownerId');
+        let ownerId = null;
+        let wasClaimed = false;
+
+        try {
+            const snapshot = await ownerIdRef.once('value');
+            ownerId = snapshot.val();
+        } catch (error) {
+            if (error?.code !== 'PERMISSION_DENIED') {
+                console.warn('⚠️ Falha ao ler ownerId:', error);
+            }
+        }
+
+        if (!ownerId) {
+            try {
+                const txn = await ownerIdRef.transaction((current) => current || defaultUid);
+                ownerId = txn.snapshot?.val() || defaultUid;
+                wasClaimed = txn.committed && ownerId === defaultUid;
+            } catch (error) {
+                console.warn('⚠️ Não foi possível registrar ownerId automaticamente:', error);
+                ownerId = ownerId || defaultUid;
+            }
+        }
+
+        return { ownerId, wasClaimed };
+    }
+    
     getSessionStorage() {
         if (this.sessionStorageOverride) {
             return this.sessionStorageOverride;
@@ -2927,103 +3033,117 @@ class EducaFlowPro {
             return;
         }
         try {
-            const email = this.currentUser.email;
+            const email = this.currentUser.email || '';
             const name = this.currentUser.displayName || '';
             const uid = this.currentUser.uid;
-            // Compatibilidade: chave antiga de usuários autorizados usava email com pontos substituídos por vírgulas.
-            // Se houver uma entrada antiga para este email, migramos para a chave por UID.
-            // Carregar lista de usuários autorizados
-            const snapshot = await this.database.ref('settings/allowedUsers').once('value');
-            const allowed = snapshot.val() || {};
-
-            // Verificar se existe uma chave antiga baseada no e-mail (com pontos substituídos por vírgulas).
             const emailKey = email ? email.replace(/\./g, ',') : null;
-            if (emailKey && allowed[emailKey] && !allowed[uid]) {
-                try {
-                    const oldRecord = allowed[emailKey];
-                    // Copia a permissão antiga; usa 'user' como padrão
-                    const perm = oldRecord.permission || 'user';
-                    // Grava uma nova entrada com o UID
-                    await this.database.ref(`settings/allowedUsers/${uid}`).set({
+            
+            let allowedRecord = null;
+
+            const { record: recordByUid } = await this.fetchAllowedUser(uid, { uid, email, name });
+            if (recordByUid) {
+                allowedRecord = {
+                    ...recordByUid,
+                    uid,
+                    email: recordByUid.email || email,
+                    name: recordByUid.name || name
+                };
+            }
+
+            if (!allowedRecord && emailKey) {
+                const legacy = await this.fetchAllowedUser(emailKey, { uid, email, name });
+                if (legacy.record) {
+                    const permission = legacy.record.permission || 'user';
+                    const payload = {
                         uid,
                         email,
                         name,
-                        createdAt: oldRecord.createdAt || firebase.database.ServerValue.TIMESTAMP,
-                        permission: perm
-                    });
-                    // Remove a entrada antiga
-                    await this.database.ref(`settings/allowedUsers/${emailKey}`).remove();
-                    // Atualiza o objeto local para refletir a alteração
-                    allowed[uid] = {
-                        uid,
-                        email,
-                        name,
-                        createdAt: oldRecord.createdAt || Date.now(),
-                        permission: perm
+                        createdAt: legacy.raw?.createdAt || firebase.database.ServerValue.TIMESTAMP,
+                        permission
                     };
-                    delete allowed[emailKey];
-                } catch (migrationError) {
-                    console.warn('⚠️ Erro ao migrar entrada antiga de usuário autorizado:', migrationError);
+                   
+                    try {
+                        await this.database.ref(`settings/allowedUsers/${uid}`).set(payload);
+                        allowedRecord = { ...payload, createdAt: Date.now() };
+                        await this.database.ref(`settings/allowedUsers/${emailKey}`).remove();
+                        console.log('🔁 Registro legado de usuário autorizado migrado para UID.');
+                    } catch (migrationError) {
+                        console.warn('⚠️ Não foi possível migrar registro legado de usuário autorizado:', migrationError);
+                    }
                 }
             }
-            // Obter ou definir o identificador do proprietário dos dados
-            const ownerIdRef = this.database.ref('settings/ownerId');
-            const ownerIdSnapshot = await ownerIdRef.once('value');
-            let ownerId = ownerIdSnapshot.val();
+            
+           const { ownerId, wasClaimed } = await this.ensureOwnerId(uid);
+            const effectiveOwnerId = ownerId || uid;
+            this.dataOwnerId = effectiveOwnerId;
+            const isOwner = effectiveOwnerId === uid;
 
-            if (Object.keys(allowed).length === 0) {
-                // Nenhum usuário autorizado ainda, tornar o primeiro usuário administrador
-                await this.database.ref(`settings/allowedUsers/${uid}`).set({
+            let autoPromoted = false;
+            let ownerRestored = false;
+
+            if (!allowedRecord && (wasClaimed || isOwner)) {
+                const adminRecord = {
                     uid,
                     email,
                     name,
                     createdAt: firebase.database.ServerValue.TIMESTAMP,
                     permission: 'admin'
-                });
-                // Definir este usuário como proprietário dos dados
-                ownerId = this.currentUser.uid;
-                await ownerIdRef.set(ownerId);
-                this.dataOwnerId = ownerId;
-                // Salva dados do usuário no nó de usuários para registrar login e permissões
+                };
+
+                try {
+                    await this.database.ref(`settings/allowedUsers/${uid}`).set(adminRecord);
+                    allowedRecord = { ...adminRecord, createdAt: Date.now() };
+                    if (emailKey) {
+                        try {
+                            await this.database.ref(`settings/allowedUsers/${emailKey}`).remove();
+                        } catch (removalError) {
+                            console.warn('⚠️ Não foi possível remover o registro legado do usuário autorizado:', removalError);
+                        }
+                    }
+
+                    if (wasClaimed) {
+                        console.log('👑 Primeiro usuário autenticado promovido automaticamente a administrador.');
+                        autoPromoted = true;
+                    } else {
+                        console.log('🛠️ Permissão administrativa restaurada automaticamente para o proprietário dos dados.');
+                        ownerRestored = true;
+                    }
+                } catch (creationError) {
+                    console.warn('⚠️ Não foi possível sincronizar o registro administrativo do proprietário:', creationError);
+                    allowedRecord = {
+                        uid,
+                        email,
+                        name,
+                        permission: 'admin',
+                        createdAt: Date.now()
+                    };
+                    autoPromoted = wasClaimed;
+                    ownerRestored = !wasClaimed && isOwner;
+                }
+            }
+
+            if (allowedRecord) {
+                this.isAdmin = (allowedRecord.permission || 'user') === 'admin';
                 await this.saveUserData(this.currentUser);
-                this.isAdmin = true;
                 await this.loadAppConfig();
                 this.updateSettingsNav();
                 this.showDashboard();
+                if (autoPromoted) {
+                    this.showToast('Primeiro acesso configurado como administrador.', 'success');
+                } else if (ownerRestored) {
+                    this.showToast('Permissão administrativa restaurada automaticamente para o proprietário dos dados.', 'info');
+                }
                 return;
             }
 
-                if (allowed[uid]) {
-                    // Usuário já autorizado
-                    const permission = allowed[uid].permission || 'user';
-                    this.isAdmin = permission === 'admin';
-                    // Define o dataOwnerId com base no ownerId salvo, se existir. Caso contrário, define para o usuário atual.
-                    if (!ownerId) {
-                        ownerId = this.currentUser.uid;
-                        await ownerIdRef.set(ownerId);
-                    }
-                    this.dataOwnerId = ownerId;
-                    // Atualiza dados do usuário no banco a cada login
-                    await this.saveUserData(this.currentUser);
-                    await this.loadAppConfig();
-                    this.updateSettingsNav();
-                    this.showDashboard();
-                    return;
-                }
-
-            // Caso não autorizado, ocultar a tela de login e mostrar modal para inserir código de convite.
-            // Carregar configuração antes de exibir o modal (para tagline correta)
             await this.loadAppConfig();
             this.updateSettingsNav();
-            // Oculta a tela de login caso ainda esteja visível
             const loginContainer = document.getElementById('login');
             if (loginContainer) loginContainer.classList.add('hidden');
-            // Exibe o modal de código de acesso
             const modal = document.getElementById('accessCodeModal');
             if (modal) {
                 modal.classList.remove('hidden');
             }
-            // Garante que os botões do modal estejam funcionais, mesmo antes de carregar o dashboard
             const verifyBtn = document.getElementById('verifyAccessCodeBtn');
             if (verifyBtn) verifyBtn.onclick = () => this.verifyAccessCode();
             const cancelBtn = document.getElementById('cancelAccessCodeBtn');
