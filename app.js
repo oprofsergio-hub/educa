@@ -123,7 +123,13 @@ class EducaFlowPro {
         this.lastInfractionSummaryAt = 0;
         this.suspensionTrackers = new Map();
         this.pendingSuspensionSuggestion = null;
-        
+
+        // Controle da persistência de autenticação. Define como o Firebase deve
+        // armazenar a sessão do usuário e permite desabilitar fluxos baseados em
+        // redirect quando o navegador não suporta armazenamento web.
+        this.authPersistence = 'local';
+        this.disableRedirectLogin = false;
+
         // Configuração Firebase REAL
         this.firebaseConfig = {
             apiKey: "AIzaSyDIP9AMW1IE7gUMZowNNrws9cgkYIzQLXY",
@@ -460,6 +466,44 @@ class EducaFlowPro {
         return this._cachedSessionStorage;
     }
 
+    async configureAuthPersistence() {
+        if (!this.auth || typeof this.auth.setPersistence !== 'function') {
+            return;
+        }
+
+        const persistenceModes = [
+            { type: 'LOCAL', value: firebase.auth.Auth.Persistence.LOCAL },
+            { type: 'SESSION', value: firebase.auth.Auth.Persistence.SESSION },
+        ];
+
+        for (const mode of persistenceModes) {
+            try {
+                await this.auth.setPersistence(mode.value);
+                this.authPersistence = mode.type.toLowerCase();
+                console.log(`🔒 Persistência de auth configurada (${mode.type}).`);
+                return;
+            } catch (error) {
+                const code = error?.code;
+                if (code === 'auth/unsupported-persistence-type' || code === 'auth/web-storage-unsupported') {
+                    console.warn(`⚠️ Persistência ${mode.type} indisponível:`, error);
+                    continue;
+                }
+
+                console.error('❌ Erro ao configurar persistência de auth:', error);
+                return;
+            }
+        }
+
+        try {
+            await this.auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+            this.authPersistence = 'none';
+            this.disableRedirectLogin = true;
+            console.warn('⚠️ Persistência indisponível. O login permanecerá ativo apenas enquanto esta aba estiver aberta.');
+        } catch (error) {
+            console.error('❌ Não foi possível configurar persistência de autenticação:', error);
+        }
+    }
+
     setRedirectInProgress() {
         const storage = this.getSessionStorage();
         if (!storage) {
@@ -504,6 +548,9 @@ class EducaFlowPro {
     }
 
     shouldUseRedirectLogin() {
+         if (this.disableRedirectLogin || this.authPersistence === 'none') {
+            return false;
+        }
         if (this.forceRedirectLogin) {
             return true;
         }
@@ -566,6 +613,12 @@ class EducaFlowPro {
                 return 'Outra tentativa de login ainda está em andamento. Aguarde alguns instantes e tente novamente.';
             case 'auth/operation-not-supported-in-this-environment':
                 return 'Este navegador exige redirecionamento para realizar o login. Recarregue a página e tente novamente.';
+            case 'auth/web-storage-unsupported':
+                return 'O navegador está bloqueando o armazenamento necessário para concluir o login. Habilite cookies/armazenamento local ou utilize outro navegador.';
+            case 'auth/unsupported-persistence-type':
+                return 'Este navegador não permite salvar a sessão de login. Libere cookies/armazenamento ou tente novamente em outro navegador.';
+            case 'auth/redirect-cancelled-by-user':
+                return 'O navegador cancelou o retorno do login. Recarregue a página e tente novamente.';
             default: {
                 const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
                 if (message.includes('network')) {
@@ -586,6 +639,8 @@ class EducaFlowPro {
             this.database = firebase.database();
             this.auth = firebase.auth();
             this.googleProvider = new firebase.auth.GoogleAuthProvider();
+            
+            await this.configureAuthPersistence();
             
             // Configurar provider
             this.googleProvider.addScope('email');
@@ -828,6 +883,14 @@ class EducaFlowPro {
                 const userEmail = result?.user?.email || 'usuário';
                 console.log('✅ Login popup sucesso!', userEmail);
                 this.showToast('Login realizado com sucesso!', 'success');
+                
+                 if (result?.user) {
+                    try {
+                        await this.handleAuthenticatedUser(result.user, { fromPopup: true, force: true });
+                    } catch (handleError) {
+                        console.warn('⚠️ Não foi possível processar usuário após login via popup:', handleError);
+                    }
+                }
                 return;
             } catch (popupError) {
                if (popupError?.code === 'auth/popup-closed-by-user' || popupError?.code === 'auth/cancelled-popup-request') {
@@ -843,6 +906,13 @@ class EducaFlowPro {
                 }
 
                 console.warn('❌ Popup falhou, tentando redirect como fallback...', popupError);
+                 if (this.disableRedirectLogin || this.authPersistence === 'none') {
+                    const fallbackMessage = this.getFriendlyLoginError(popupError);
+                    const toastType = popupError?.code === 'auth/popup-blocked' ? 'warning' : 'error';
+                    this.showLoginError(fallbackMessage);
+                    this.showToast(fallbackMessage, toastType);
+                    return;
+                }
                 if (!this.isRedirectInProgress()) {
                     this.setRedirectInProgress();
                 }
