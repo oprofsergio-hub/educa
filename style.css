@@ -1540,6 +1540,16 @@ th, td {
   border-bottom: 1px solid var(--color-card-border-inner);
 }
 
+.action-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.action-cell .btn {
+  flex: 1 0 auto;
+}
+
 th {
   background: var(--color-bg-1);
   font-weight: var(--font-weight-semibold);
@@ -1871,8 +1881,8 @@ tr:hover {
 
 /* Severity Indicators */
 .severity-leve {
-  background: #ef4444;
-  color: #ffffff;
+  background: #facc15;
+  color: #1f2937;
   padding: var(--space-2) var(--space-8);
   border-radius: var(--radius-full);
   font-size: var(--font-size-xs);
