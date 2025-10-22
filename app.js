@@ -3641,7 +3641,7 @@ class EducaFlowPro {
                 reason: reason || 'Suspensão recomendada',
                 durationDays,
                 letterText,
-                summary: severitySummary,;
+                summary: severitySummary,
             });
 
             this.showToast('Suspensão gerada com sucesso.', 'success');
