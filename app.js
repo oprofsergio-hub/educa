@@ -1346,8 +1346,10 @@ class EducaFlowPro {
                     }
                 }
                 
+                students = this.sortStudentsByName(Array.isArray(students) ? students : []);
+                
                 // Atualiza o cache interno de alunos para busca rápida
-                this.studentsCache = Array.isArray(students) ? [...students] : [];
+                this.studentsCache = [...students];
 
                  const infractions = await this.getAllInfractions();
                 const summary = this.computeInfractionSummary(infractions, students);
@@ -1808,11 +1810,24 @@ class EducaFlowPro {
         }
     }
 
+     sortStudentsByName(students = []) {
+        return [...students].sort((a, b) => {
+            const nameA = (a?.nome || '').toString();
+            const nameB = (b?.nome || '').toString();
+            const primary = nameA.localeCompare(nameB, 'pt-BR', { sensitivity: 'base' });
+            if (primary !== 0) return primary;
+            const classA = (a?.turma || '').toString();
+            const classB = (b?.turma || '').toString();
+            return classA.localeCompare(classB, 'pt-BR', { sensitivity: 'base' });
+        });
+    }
+
     /**
      * Insere uma lista de alunos nos elementos select apropriados.
      * @param {Array} students Lista de objetos de aluno
      */
     applyStudentsToSelects(students) {
+        const orderedStudents = this.sortStudentsByName(Array.isArray(students) ? students : []);
         const selects = [
             document.getElementById('infractionStudent'),
             document.getElementById('studentForReport'),
@@ -1824,7 +1839,7 @@ class EducaFlowPro {
                 while (select.children.length > 1) {
                     select.removeChild(select.lastChild);
                 }
-                students.forEach(student => {
+                orderedStudents.forEach(student => {
                     const option = document.createElement('option');
                     option.value = student.nome;
                     option.textContent = `${student.nome} (${student.turma})`;
@@ -1978,11 +1993,6 @@ class EducaFlowPro {
         if (confirmInfractionSelectionBtn) {
             confirmInfractionSelectionBtn.onclick = () => this.confirmInfractionSelection();
         }
-        const generateGeneralStudentReportBtn = document.getElementById('generateGeneralStudentReportBtn');
-        if (generateGeneralStudentReportBtn) {
-            generateGeneralStudentReportBtn.onclick = () => this.generateGeneralStudentReport();
-        }
-       
         const generateSuspensionBtn = document.getElementById('generateSuspensionBtn');
         if (generateSuspensionBtn) {
             generateSuspensionBtn.onclick = () => this.confirmSuspensionGeneration();
@@ -2535,27 +2545,49 @@ class EducaFlowPro {
         try {
             // Armazenar nome atual
             this.currentReportStudentName = studentName;
-            // Carregar todas as infrações do aluno
+           // Carregar e ordenar todas as infrações do aluno
             const infractions = await this.getStudentInfractions(studentName);
-            this.currentReportInfractions = infractions;
+            const normalizedInfractions = Array.isArray(infractions)
+                ? infractions.map((inf, index) => ({ ...inf, __internalId: inf.id || `__local-${index}` }))
+                    .sort((a, b) => new Date(a.data) - new Date(b.data))
+                : [];
+            this.currentReportInfractions = normalizedInfraction
+            
             // Construir lista de seleção
             const listEl = document.getElementById('infractionSelectionList');
             if (listEl) {
                 listEl.innerHTML = '';
-                if (infractions.length === 0) {
+                if (normalizedInfractions.length === 0) {
                     const noData = document.createElement('p');
                     noData.textContent = 'Nenhuma infração registrada para este aluno.';
                     listEl.appendChild(noData);
                 } else {
-                    infractions.forEach((inf, index) => {
+                   const displayInfractions = [...normalizedInfractions].reverse();
+
+                    const allOption = document.createElement('label');
+                    allOption.className = 'selection-item selection-item--all';
+                    allOption.innerHTML = `
+                        <input type="radio" name="selectedInfraction" value="__all__" checked>
+                        <span>Relatório completo com todas as infrações (${normalizedInfractions.length})</span>
+                    `;
+                    listEl.appendChild(allOption);
+
+                    displayInfractions.forEach((inf) => {
+                        const dateText = inf.data ? new Date(inf.data).toLocaleDateString('pt-BR') : 'Data não informada';
+                        const severityLabel = this.getGravidadeLabel(inf.gravidade);
                         const item = document.createElement('label');
                         item.className = 'selection-item';
                         item.innerHTML = `
-                            <input type="radio" name="selectedInfraction" value="${inf.id}" ${index === 0 ? 'checked' : ''}>
-                            <span>${new Date(inf.data).toLocaleDateString('pt-BR')} - ${inf.tipo} (${this.getGravidadeLabel(inf.gravidade)})</span>
+                            <input type="radio" name="selectedInfraction" value="${inf.__internalId}">
+                            <span>${dateText} - ${inf.tipo} (${severityLabel})</span>
                         `;
                         listEl.appendChild(item);
                     });
+                
+                const firstRadio = listEl.querySelector('input[name="selectedInfraction"]');
+                    if (firstRadio) {
+                        firstRadio.checked = true;
+                    }
                 }
             }
             // Mostrar modal
@@ -2581,8 +2613,24 @@ class EducaFlowPro {
             }
             const selectedId = selectedInput.value;
             const studentName = this.currentReportStudentName;
-            // Encontrar a infração selecionada na lista armazenada
-            const infraction = this.currentReportInfractions.find(inf => inf.id === selectedId);
+            if (!studentName) {
+                this.showToast('Nenhum aluno selecionado', 'error');
+                return;
+            }
+
+            if (selectedId === '__all__') {
+                if (!this.currentReportInfractions || this.currentReportInfractions.length === 0) {
+                    this.showToast('Nenhuma infração encontrada para este aluno', 'info');
+                    return;
+                }
+                if (modal) modal.classList.add('hidden');
+                await this.generateGeneralStudentReport(this.currentReportInfractions);
+                return;
+            }
+
+            const infraction = Array.isArray(this.currentReportInfractions)
+                ? this.currentReportInfractions.find(inf => inf.__internalId === selectedId || inf.id === selectedId)
+                : null;
             if (!infraction) {
                 this.showToast('Dados da infração não encontrados', 'error');
                 return;
@@ -2606,7 +2654,7 @@ class EducaFlowPro {
      * O relatório inclui todas as infrações com data, tipo, gravidade,
      * descrição e medidas aplicadas.
      */
-    async generateGeneralStudentReport() {
+    async generateGeneralStudentReport(preloadedInfractions = null) {
         const modal = document.getElementById('infractionSelectModal');
         try {
             const studentName = this.currentReportStudentName;
@@ -2614,14 +2662,17 @@ class EducaFlowPro {
                 this.showToast('Nenhum aluno selecionado', 'error');
                 return;
             }
-            // Fechar modal
-            if (modal) modal.classList.add('hidden');
             // Obter infrações do aluno
-            const infractions = await this.getStudentInfractions(studentName);
+            const infractionsSource = Array.isArray(preloadedInfractions)
+                ? preloadedInfractions.map(inf => ({ ...inf }))
+                : await this.getStudentInfractions(studentName);
+            const infractions = Array.isArray(infractionsSource) ? infractionsSource : [];
             if (infractions.length === 0) {
                 this.showToast('Nenhuma infração encontrada para este aluno', 'info');
                 return;
             }
+            // Fechar modal apenas quando a função for chamada diretamente
+            if (!preloadedInfractions && modal) modal.classList.add('hidden');
             await this.generateStudentDetailedReportPDF(studentName, infractions);
         } catch (error) {
             console.error('Erro ao gerar relatório completo do aluno:', error);
@@ -2641,57 +2692,149 @@ class EducaFlowPro {
      */
     async generateStudentDetailedReportPDF(studentName, infractions) {
         try {
+            if (!Array.isArray(infractions) || infractions.length === 0) {
+                this.showToast('Nenhuma infração encontrada para este aluno', 'info');
+                return;
+            }
+
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
+            
             const pageWidth = doc.internal.pageSize.getWidth();
+            const pageHeight = doc.internal.pageSize.getHeight();
             const margin = 20;
+            const maxWidth = pageWidth - margin * 2;
+            const lineHeight = 6;
             let y = margin;
-            // Cabeçalho
-            doc.setFontSize(18);
-            doc.setTextColor(30, 64, 175);
-            doc.text('Relatório Geral do Aluno', pageWidth / 2, y, { align: 'center' });
-            y += 10;
-            doc.setFontSize(14);
-            doc.text(studentName, pageWidth / 2, y, { align: 'center' });
-            y += 10;
-            doc.setFontSize(10);
-            doc.setTextColor(0, 0, 0);
-            // Para cada infração, listar detalhes
-            infractions.sort((a, b) => new Date(a.data) - new Date(b.data));
-            infractions.forEach((inf, index) => {
-                if (y > 280) {
+            
+            const ensureSpace = (lines = 1) => {
+                if (y + lineHeight * lines > pageHeight - margin) {
                     doc.addPage();
                     y = margin;
                 }
-                const dateStr = new Date(inf.data).toLocaleDateString('pt-BR');
-                const timeStr = inf.horario || '';
-                const gravLabel = this.getGravidadeLabel(inf.gravidade);
+                 };
+
+            const addSpacing = (amount = lineHeight) => {
+                const linesNeeded = Math.ceil(amount / lineHeight);
+                ensureSpace(linesNeeded);
+                y += amount;
+            };
+
+            const writeParagraph = (text) => {
+                if (text === null || text === undefined) return;
+                const paragraphs = Array.isArray(text) ? text : [text];
+                paragraphs.forEach((paragraph) => {
+                    if (!paragraph) return;
+                    const lines = doc.splitTextToSize(paragraph, maxWidth);
+                    lines.forEach((line) => {
+                        ensureSpace();
+                        doc.text(line, margin, y);
+                        y += lineHeight;
+                    });
+                });
+            };
+
+            const writeSectionTitle = (title) => {
+                ensureSpace();
+                doc.setFont('helvetica', 'bold');
                 doc.setFontSize(12);
-                doc.setTextColor(30, 64, 175);
-                doc.text(`${index + 1}. ${dateStr} ${timeStr}`, margin, y);
-                y += 6;
-                doc.setFontSize(10);
-                doc.setTextColor(0, 0, 0);
-                doc.text(`Tipo: ${inf.tipo} (${gravLabel})`, margin, y);
-                y += 6;
-                doc.text(`Descrição: ${inf.descricao}`, margin, y);
-                y += 6;
-                if (inf.medidas) {
-                    doc.text(`Medidas: ${inf.medidas}`, margin, y);
-                    y += 6;
-                }
-                doc.text(`Responsável: ${inf.responsavel || 'N/A'}`, margin, y);
-                y += 8;
-            });
-            // Rodapé
-            if (y > 270) {
-                doc.addPage();
-                y = margin;
+                 doc.text(title, margin, y);
+                y += lineHeight;
+                doc.setFontSize(11);
+                doc.setFont('helvetica', 'normal');
+            };
+
+            const sortedInfractions = infractions
+                .map((inf, index) => ({ ...inf, __internalId: inf.__internalId || inf.id || `__local-${index}` }))
+                .sort((a, b) => new Date(a.data) - new Date(b.data));
+
+            const firstDate = sortedInfractions[0]?.data ? new Date(sortedInfractions[0].data) : null;
+            const lastDate = sortedInfractions[sortedInfractions.length - 1]?.data ? new Date(sortedInfractions[sortedInfractions.length - 1].data) : null;
+            let periodoTexto = '__/__/____';
+            if (firstDate && lastDate) {
+                periodoTexto = `${firstDate.toLocaleDateString('pt-BR')} e ${lastDate.toLocaleDateString('pt-BR')}`;
+            } else if (firstDate) {
+                periodoTexto = firstDate.toLocaleDateString('pt-BR');
             }
-            doc.setFontSize(8);
-            doc.setTextColor(100, 100, 100);
-            doc.text(`Gerado pelo EducaFlow Pro v2.0 em ${new Date().toLocaleString('pt-BR')}`, pageWidth / 2, 285, { align: 'center' });
-            const fileName = `historico-completo-${studentName.replace(/\s+/g, '-')}-${Date.now()}.pdf`;
+
+            const studentRecord = await this.findStudentDataByName(studentName);
+            const turma = sortedInfractions.find(inf => inf.turma)?.turma || studentRecord?.turma || '_________________________';
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(16);
+            doc.text('ESCOLA MUNICIPAL JOSÉ ANTÔNIO DOS SANTOS', pageWidth / 2, y, { align: 'center' });
+            addSpacing(lineHeight + 2);
+            doc.setFontSize(13);
+            doc.text('Relatório de Advertência Individual Escolar', pageWidth / 2, y, { align: 'center' });
+            addSpacing(lineHeight * 2);
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(11);
+            doc.setTextColor(0, 0, 0);
+
+            writeParagraph(`O presente relatório tem como finalidade registrar e acompanhar o comportamento do(a) aluno(a) ${studentName}, do(a) turma/ano ${turma}, reunindo os episódios ocorridos entre ${periodoTexto}, descritos a seguir:`);
+            addSpacing(lineHeight);
+
+            writeSectionTitle('Descrição das advertências:');
+
+            sortedInfractions.forEach((inf, index) => {
+                ensureSpace(2);
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(11);
+                const occurrenceDate = inf.data ? new Date(inf.data).toLocaleDateString('pt-BR') : '__/__/____';
+                const occurrenceTime = inf.horario ? ` às ${inf.horario}` : '';
+                doc.text(`${index + 1}ª ocorrência - ${occurrenceDate}${occurrenceTime}`, margin, y);
+                addSpacing(lineHeight);
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(11);
+                const details = [
+                    `• Tipo: ${inf.tipo || 'Não informado'} (${this.getGravidadeLabel(inf.gravidade)})`,
+                    inf.turma ? `• Turma registrada: ${inf.turma}` : null,
+                    `• Descrição detalhada: ${inf.descricao || 'Sem descrição detalhada fornecida.'}`,
+                    `• Medidas adotadas pela coordenação: ${inf.medidas || 'Acompanhamento pedagógico e orientações à família.'}`,
+                    `• Responsável pelo registro: ${inf.responsavel || 'Não informado'}`,
+                ];
+                details.forEach(line => writeParagraph(line));
+                if (inf.observacoes) {
+                    writeParagraph(`• Observações complementares: ${inf.observacoes}`);
+                    }
+                addSpacing(lineHeight / 2);
+                });
+
+                const medidas = Array.from(new Set(sortedInfractions.map(inf => (inf.medidas || '').trim()).filter(Boolean)));
+                writeSectionTitle('Medidas gerais adotadas pela coordenação:');
+                if (medidas.length) {
+                    medidas.forEach(medida => writeParagraph(`• ${medida}`));
+                } else {
+                    writeParagraph('• A coordenação pedagógica manterá acompanhamento contínuo, reforçando as orientações comportamentais junto à família e ao aluno.');
+                }         
+                addSpacing(lineHeight / 2);
+
+                writeSectionTitle('Orientações pedagógicas à família e ao estudante:');
+                writeParagraph([
+                'A Escola Municipal José Antônio dos Santos reafirma seu compromisso com a formação integral do estudante, compreendendo que o processo educativo vai além do ensino de conteúdos: envolve o desenvolvimento de atitudes, valores e responsabilidades. Por isso, este registro tem caráter pedagógico e reflexivo, buscando promover a conscientização do(a) aluno(a) sobre suas ações e suas consequências dentro do ambiente escolar.',
+                'Destacamos que o acompanhamento da família é fundamental nesse processo. É papel dos pais ou responsáveis acompanhar a vida escolar do(a) filho(a), dialogar com a escola, verificar eventuais comportamentos inadequados relatados e agir em parceria com a instituição, contribuindo para que o aluno desenvolva hábitos de respeito, disciplina e convivência saudável. A omissão familiar diante de condutas inadequadas pode comprometer o progresso escolar e o desenvolvimento social do estudante.',
+                'A escola e a família, atuando juntas, fortalecem os laços de confiança e garantem que cada aluno tenha condições de aprender, crescer e transformar seus comportamentos em oportunidades de aprendizado.'
+            ]);
+            addSpacing(lineHeight / 2);
+
+            writeSectionTitle('Plano de acompanhamento pedagógico sugerido:');
+            [
+                '• Realizar encontros periódicos entre a coordenação e a família para alinhamento das estratégias educativas.',
+                '• Desenvolver, junto ao aluno, metas comportamentais claras e acompanhá-las semanalmente.',
+                '• Incentivar o(a) estudante a refletir sobre suas atitudes e propor ações reparadoras quando necessário.',
+                '• Monitorar a participação nas atividades escolares e oferecer apoio pedagógico complementar quando indicado.'
+            ].forEach(item => writeParagraph(item));
+
+            addSpacing(lineHeight);
+            writeParagraph(`Data de emissão: ${new Date().toLocaleDateString('pt-BR')}`);
+            addSpacing(lineHeight / 2);
+
+            writeParagraph('Assinatura do responsável pelo registro: ___________________________________________');
+            writeParagraph('Assinatura do aluno: ___________________________________________');
+            writeParagraph('Assinatura do responsável: ___________________________________________');
+
+            const fileName = `historico-completo-${this.getStudentStorageKey(null, studentName) || 'aluno'}-${Date.now()}.pdf`
             doc.save(fileName);
             this.showToast('Relatório completo do aluno gerado com sucesso!', 'success');
         } catch (error) {
@@ -2699,7 +2842,7 @@ class EducaFlowPro {
             this.showToast('Erro ao gerar relatório detalhado', 'error');
         }
     }
-
+    
     /**
      * Procura uma infração pelo ID em qualquer modo (demo ou real).
      * Utilizado para gerar advertências específicas quando o ID é conhecido.
@@ -2746,215 +2889,103 @@ class EducaFlowPro {
             const doc = new jsPDF();
             
             const pageWidth = doc.internal.pageSize.getWidth();
+            const pageHeight = doc.internal.pageSize.getHeight();
             const margin = 20;
-            const lineHeight = 7;
-            let yPosition = margin;
-            
-            // Cabeçalho do relatório
-            doc.setFontSize(18);
-            doc.setTextColor(30, 64, 175);
-            doc.text('EDUCAFLOW PRO - GESTÃO ESCOLAR', pageWidth / 2, yPosition, { align: 'center' });
-            yPosition += lineHeight + 5;
+            const maxWidth = pageWidth - margin * 2;
+            const lineHeight = 6;
+            let y = margin;
 
-            doc.setFontSize(14);
-            doc.text('RELATÓRIO DE ADVERTÊNCIA DISCIPLINAR', pageWidth / 2, yPosition, { align: 'center' });
-            yPosition += lineHeight + 15;
-            
-            // Data e identificação
-            doc.setFontSize(10);
-            doc.setTextColor(0, 0, 0);
-            doc.text(`Data de Emissão: ${new Date().toLocaleDateString('pt-BR')}`, margin, yPosition);
-            yPosition += lineHeight + 10;
-            
-            // Seção de valores educacionais
-            doc.setFontSize(14);
-            doc.setTextColor(30, 64, 175);
-            doc.text('Parceria Escola-Família', margin, yPosition);
-            yPosition += lineHeight + 5;
-            
-            doc.setFontSize(10);
-            doc.setTextColor(0, 0, 0);
-            
-            // Utiliza texto pedagógico personalizado se configurado, caso contrário usa padrão
-            let educationalText = [];
-            if (this.config && this.config.defaultPedagogicalText) {
-                educationalText = this.config.defaultPedagogicalText.split('\n');
-            } else {
-                educationalText = [
-                    'Prezados Pais e Responsáveis,',
-                    '',
-                    'A educação é um processo colaborativo que exige parceria ativa entre',
-                    'escola e família. Nossa instituição acredita que:',
-                    '',
-                    '- A escola é responsável pela formação acadêmica e valores',
-                    '- A família é a base fundamental para o desenvolvimento do caráter',
-                    '- A parceria entre ambas fortalece o processo educativo',
-                    '- O diálogo constante é essencial para o sucesso do aluno',
-                    '',
-                    'Compromissos da Escola:',
-                    '• Oferecer ensino de qualidade e ambiente seguro',
-                    '• Comunicar-se transparentemente com as famílias',
-                    '• Orientar pedagogicamente os estudantes',
-                    '• Promover o desenvolvimento integral',
-                    '',
-                    'Compromissos da Família:',
-                    '• Acompanhar a vida escolar do filho(a)',
-                    '• Reforçar em casa os valores da escola',
-                    '• Participar das reuniões e eventos',
-                    '• Apoiar as decisões pedagógicas',
-                ];
-            }
+             const ensureSpace = (lines = 1) => {
+                if (y + lineHeight * lines > pageHeight - margin) {
+                    doc.addPage();
+                   y = margin;
+                }
+               };
 
-            educationalText.forEach(line => {
-                if (yPosition > 250) {
-                    doc.addPage();
-                    yPosition = margin;
-                }
-                doc.text(line, margin, yPosition);
-                yPosition += lineHeight;
-            });
-            
-            yPosition += 10;
-            
-            // Detalhes da ocorrência
-            if (yPosition > 200) {
-                doc.addPage();
-                yPosition = margin;
-            }
-            
-            doc.setFontSize(14);
-            doc.setTextColor(255, 193, 7);
-            doc.text('Detalhes da Ocorrência', margin, yPosition);
-            yPosition += lineHeight + 5;
-            
-            doc.setFontSize(10);
-            doc.setTextColor(0, 0, 0);
-            
-            const details = [
-                `Aluno: ${studentName}`,
-                `Turma: ${infractionData.turma}`,
-                `Data: ${new Date(infractionData.data).toLocaleDateString('pt-BR')} às ${infractionData.horario || 'N/A'}`,
-                `Tipo: ${infractionData.tipo}`,
-                `Gravidade: ${this.getGravidadeLabel(infractionData.gravidade)}`,
-                `Responsável: ${infractionData.responsavel || 'N/A'}`,
-                '',
-                'Descrição Detalhada:',
-                infractionData.descricao || 'Sem descrição',
-                '',
-                'Medidas Pedagógicas Aplicadas:',
-                infractionData.medidas || 'Orientações gerais'
-            ];
-            
-            details.forEach(line => {
-                if (yPosition > 270) {
-                    doc.addPage();
-                    yPosition = margin;
-                }
-                
-                if (line.length > 70) {
-                    const words = line.split(' ');
-                    let currentLine = '';
-                    words.forEach(word => {
-                        if ((currentLine + word).length < 70) {
-                            currentLine += word + ' ';
-                        } else {
-                            doc.text(currentLine.trim(), margin, yPosition);
-                            yPosition += lineHeight;
-                            currentLine = word + ' ';
-                        }
+            const addSpacing = (amount = lineHeight) => {
+                const linesNeeded = Math.ceil(amount / lineHeight);
+                ensureSpace(linesNeeded);
+                y += amount;
+            };
+
+            const writeParagraph = (text) => {
+                if (text === null || text === undefined) return;
+                const paragraphs = Array.isArray(text) ? text : [text];
+                paragraphs.forEach((paragraph) => {
+                    if (!paragraph) return;
+                    const lines = doc.splitTextToSize(paragraph, maxWidth);
+                    lines.forEach((line) => {
+                        ensureSpace();
+                        doc.text(line, margin, y);
+                        y += lineHeight;
                     });
-                    if (currentLine.trim()) {
-                        doc.text(currentLine.trim(), margin, yPosition);
-                        yPosition += lineHeight;
-                    }
-                } else {
-                    doc.text(line, margin, yPosition);
-                    yPosition += lineHeight;
-                }
-            });
-            
-            yPosition += 10;
-            
-            // Plano de Melhoria
-            if (yPosition > 200) {
-                doc.addPage();
-                yPosition = margin;
-            }
-            
-            doc.setFontSize(14);
-            doc.setTextColor(40, 167, 69);
-            doc.text('PLANO DE MELHORIA E COMPROMISSOS', margin, yPosition);
-            yPosition += lineHeight + 5;
+                   });
+            };
 
-            doc.setFontSize(10);
+            const writeSectionTitle = (title) => {
+                ensureSpace();
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(12);
+                doc.text(title, margin, y);
+                y += lineHeight;
+                doc.setFontSize(11);
+                doc.setFont('helvetica', 'normal');
+            };
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(16);
+            doc.text('ESCOLA MUNICIPAL JOSÉ ANTÔNIO DOS SANTOS', pageWidth / 2, y, { align: 'center' });
+            addSpacing(lineHeight + 2);
+            doc.setFontSize(13);
+            doc.text('Relatório de Advertência Individual Escolar', pageWidth / 2, y, { align: 'center' });
+            addSpacing(lineHeight * 2);
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(11);
             doc.setTextColor(0, 0, 0);
 
-            const improvementPlan = [
-                'Solicitamos COLABORAÇÃO FAMILIAR para orientar o estudante:',
-                '',
-                '- Autocontrole e disciplina pessoal',
-                '- Responsabilidade com compromissos escolares',
-                '- Respeito às normas de convivência',
-                '- Empatia com colegas e professores',
-                '- Compromisso com sua própria educação',
-                '',
-                `Compromisso do Estudante ${studentName}:`,
-                '"Reconheço que meu comportamento não foi adequado e comprometo-me a:',
-                '□ Respeitar as regras da escola',
-                '□ Tratar todos com educação e respeito',
-                '□ Participar ativamente das aulas',
-                '□ Ser um exemplo positivo para colegas',
-                '□ Buscar ajuda sempre que necessário"'
+            const turma = infractionData?.turma || '_________________________';
+            const dataOcorrencia = infractionData?.data ? new Date(infractionData.data).toLocaleDateString('pt-BR') : '__/__/____';
+            const horario = infractionData?.horario ? ` às ${infractionData.horario}` : '';
+            writeParagraph(`O presente relatório tem como finalidade registrar e acompanhar o comportamento do(a) aluno(a) ${studentName}, do(a) turma/ano ${turma}, em relação ao episódio ocorrido no dia ${dataOcorrencia}${horario}, descrito a seguir:`);
+            addSpacing(lineHeight);
+
+            writeSectionTitle('Descrição da advertência:');
+
+            const detalhes = [
+                `• Tipo de ocorrência: ${infractionData?.tipo || 'Não informado'}`,
+                `• Gravidade: ${this.getGravidadeLabel(infractionData?.gravidade)}`,
+                `• Data e horário da ocorrência: ${dataOcorrencia}${horario}`,
+                `• Descrição detalhada: ${infractionData?.descricao || 'Sem descrição detalhada fornecida.'}`,
+                `• Medidas adotadas pela coordenação: ${infractionData?.medidas || 'Acompanhamento pedagógico e orientações à família.'}`,
+                `• Responsável pelo registro: ${infractionData?.responsavel || 'Não informado'}`,
             ];
-            
-            improvementPlan.forEach(line => {
-                if (yPosition > 270) {
-                    doc.addPage();
-                    yPosition = margin;
-                }
-                doc.text(line, margin, yPosition);
-                yPosition += lineHeight;
-            });
-            
-            // Assinaturas
-            if (yPosition > 220) {
-                doc.addPage();
-                yPosition = margin;
+            detalhes.forEach((linha) => writeParagraph(linha));
+
+            if (infractionData?.observacoes) {
+                writeParagraph(`• Observações complementares: ${infractionData.observacoes}`);
             }
             
-            yPosition += 20;
-            
-            doc.setFontSize(12);
-            doc.text('✍️ ASSINATURAS', pageWidth/2, yPosition, { align: 'center' });
-            yPosition += 20;
-            
-            doc.setFontSize(10);
-            doc.text('Coordenação Pedagógica', 30, yPosition);
-            doc.text('Direção Escolar', pageWidth/2, yPosition, { align: 'center' });
-            doc.text('Pai/Mãe/Responsável', pageWidth - 50, yPosition, { align: 'center' });
-            
-            yPosition += 10;
-            doc.line(20, yPosition, 70, yPosition);
-            doc.line(90, yPosition, 125, yPosition);
-            doc.line(140, yPosition, 190, yPosition);
-            
-            yPosition += 20;
-            doc.text('Assinatura do(a) Estudante', pageWidth/2, yPosition, { align: 'center' });
-            doc.text(studentName, pageWidth/2, yPosition + 5, { align: 'center' });
-            yPosition += 10;
-            doc.line(60, yPosition, 150, yPosition);
-            
-            // Footer
-            yPosition = 285;
-            doc.setFontSize(8);
-            doc.setTextColor(100, 100, 100);
-            doc.text(`Gerado pelo EducaFlow Pro v2.0 em ${new Date().toLocaleString('pt-BR')}`, pageWidth/2, yPosition, { align: 'center' });
-            
-            const fileName = `advertencia-${studentName.replace(/\s+/g, '-')}-${Date.now()}.pdf`;
+            addSpacing(lineHeight / 2);
+
+            writeParagraph([
+                'A Escola Municipal José Antônio dos Santos reafirma seu compromisso com a formação integral do estudante, compreendendo que o processo educativo vai além do ensino de conteúdos: envolve o desenvolvimento de atitudes, valores e responsabilidades. Por isso, este registro tem caráter pedagógico e reflexivo, buscando promover a conscientização do(a) aluno(a) sobre suas ações e suas consequências dentro do ambiente escolar.',
+                'Destacamos que o acompanhamento da família é fundamental nesse processo. É papel dos pais ou responsáveis acompanhar a vida escolar do(a) filho(a), dialogar com a escola, verificar eventuais comportamentos inadequados relatados e agir em parceria com a instituição, contribuindo para que o aluno desenvolva hábitos de respeito, disciplina e convivência saudável. A omissão familiar diante de condutas inadequadas pode comprometer o progresso escolar e o desenvolvimento social do estudante.',
+                'A escola e a família, atuando juntas, fortalecem os laços de confiança e garantem que cada aluno tenha condições de aprender, crescer e transformar seus comportamentos em oportunidades de aprendizado.'
+            ]);
+
+            addSpacing(lineHeight);
+            writeParagraph(`Data de emissão: ${new Date().toLocaleDateString('pt-BR')}`);
+            addSpacing(lineHeight / 2);
+
+            writeParagraph('Assinatura do responsável pelo registro: ___________________________________________');
+            writeParagraph('Assinatura do aluno: ___________________________________________');
+            writeParagraph('Assinatura do responsável: ___________________________________________');
+
+            const fileName = `advertencia-${this.getStudentStorageKey(null, studentName) || 'aluno'}-${Date.now()}.pdf`;            doc.save(fileName);
             doc.save(fileName);
             
             this.showToast('Relatório educacional gerado com sucesso!', 'success');
-            
         } catch (error) {
             console.error('❌ Erro ao gerar relatório:', error);
             this.showToast(`Erro ao gerar relatório: ${error.message}`, 'error');
@@ -2998,7 +3029,7 @@ class EducaFlowPro {
                 students.push({ id: child.key, ...child.val() });
             });
         }
-        return students;
+        return this.sortStudentsByName(students);
     }
 
     invalidateInfractionSummary() {
