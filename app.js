@@ -520,6 +520,16 @@ class EducaFlowPro {
         }
     }
 
+    escapeHtml(value) {
+        if (value === null || value === undefined) return '';
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     hideLoginError() {
         const loginError = document.getElementById('loginError');
         if (loginError) {
@@ -615,6 +625,13 @@ class EducaFlowPro {
             } catch (redirectError) {
                 // Em alguns navegadores, getRedirectResult pode lançar se não houver resultado
                 console.warn('⚠️ Erro ao obter resultado de redirect:', redirectError);
+            const friendlyMessage = this.getFriendlyLoginError(redirectError);
+                const toastType = redirectError?.code === 'auth/unauthorized-domain' ? 'error' : 'warning';
+                this.showLoginError(friendlyMessage);
+                this.showToast(friendlyMessage, toastType);
+                this.awaitingRedirectResult = false;
+                this.hideSplash();
+                this.showLogin();
             } finally {
                 // Após processar o resultado do redirect, limpa a flag para permitir
                 // novos redirecionamentos em logins futuros.
@@ -1370,16 +1387,27 @@ class EducaFlowPro {
         const row = document.createElement('tr');
         const counts = this.getStudentCountsFromSummary(summary, student);
         const badges = this.renderInfractionBadges(counts);
+        const studentName = student?.nome || '';
+        const safeStudentName = this.escapeHtml(studentName);
+        const classLabel = this.escapeHtml(counts.className || student.turma || 'N/A');
+
         row.innerHTML = `
-            <td>${student.nome}</td>
-            <td>${counts.className || student.turma || 'N/A'}</td>
+            <td>${safeStudentName}</td>
+            <td>${classLabel}</td>
             <td>${badges}</td>
             <td><span class="status status--active">Ativo</span></td>
-            <td>
+            <td class="action-cell">
+                <button type="button" class="btn btn--sm btn--primary student-report-btn">📄 Relatório</button>
                 <button class="btn btn--sm btn--outline" onclick="app.editStudent('${id}')">✏️ Editar</button>
                 <button class="btn btn--sm btn--outline" onclick="app.deleteStudent('${id}')">🗑️ Excluir</button>
             </td>
         `;
+
+        const reportBtn = row.querySelector('.student-report-btn');
+        if (reportBtn) {
+            reportBtn.addEventListener('click', () => this.openReportSelectionModal(studentName));
+        }
+        
         return row;
     }
 
@@ -1514,18 +1542,38 @@ class EducaFlowPro {
 
     createInfractionRow(id, infraction) {
         const row = document.createElement('tr');
+        const rawStudentName = infraction?.aluno || '';
+        const safeStudentName = this.escapeHtml(rawStudentName);
+        const rawClass = infraction?.turma || 'N/A';
+        const safeClass = this.escapeHtml(rawClass);
+        const rawType = infraction?.tipo || '';
+        const safeType = this.escapeHtml(rawType);
+        const severityKey = (infraction?.gravidade || 'leve').toLowerCase();
+        const severityLabel = this.escapeHtml(this.getGravidadeLabel(severityKey));
+        const date = infraction?.data ? new Date(infraction.data) : null;
+        const formattedDate = date && !Number.isNaN(date.getTime())
+            ? date.toLocaleDateString('pt-BR')
+            : 'Data não informada';
+        
         row.innerHTML = `
-            <td>${new Date(infraction.data).toLocaleDateString('pt-BR')}</td>
-            <td>${infraction.aluno}</td>
-            <td>${infraction.turma || 'N/A'}</td>
-            <td>${infraction.tipo}</td>
-            <td><span class="severity-${infraction.gravidade}">${this.getGravidadeLabel(infraction.gravidade)}</span></td>
-            <td>
-                <button class="btn btn--sm btn--primary" onclick="app.openReportSelectionModal('${infraction.aluno}')">📄 Relatório</button>
+           <td>${formattedDate}</td>
+            <td>${safeStudentName}</td>
+            <td>${safeClass}</td>
+            <td>${safeType}</td>
+            <td><span class="severity-${severityKey}">${severityLabel}</span></td>
+            <td class="action-cell">
+                <button type="button" class="btn btn--sm btn--primary infraction-report-btn">📄 Relatório</button>
                 <button class="btn btn--sm btn--outline" onclick="app.editInfraction('${id}')">✏️ Editar</button>
                 <button class="btn btn--sm btn--outline" onclick="app.deleteInfraction('${id}')">🗑️ Excluir</button>
             </td>
         `;
+        
+        const reportBtn = row.querySelector('.infraction-report-btn');
+        if (reportBtn) {
+            const inferredId = infraction?.id || id || null;
+            reportBtn.addEventListener('click', () => this.openReportSelectionModal(rawStudentName, inferredId));
+        }
+
         return row;
     }
 
@@ -2540,8 +2588,9 @@ class EducaFlowPro {
      * O usuário poderá escolher entre gerar uma advertência específica ou
      * um relatório completo de todas as ocorrências do aluno.
      * @param {string} studentName Nome do aluno para o qual será gerado o relatório
+      * @param {string|null} preselectInfractionId ID da infração que deve ser pré-selecionada quando disponível
      */
-    async openReportSelectionModal(studentName) {
+    async openReportSelectionModal(studentName, preselectInfractionId = null) {
         try {
             // Armazenar nome atual
             this.currentReportStudentName = studentName;
@@ -2551,7 +2600,20 @@ class EducaFlowPro {
                 ? infractions.map((inf, index) => ({ ...inf, __internalId: inf.id || `__local-${index}` }))
                     .sort((a, b) => new Date(a.data) - new Date(b.data))
                 : [];
-            this.currentReportInfractions = normalizedInfraction
+            this.currentReportInfractions = normalizedInfractions;
+
+            let defaultSelectionValue = '__all__';
+            if (preselectInfractionId) {
+                const desiredId = String(preselectInfractionId);
+                const match = normalizedInfractions.find((inf) => {
+                    const candidateId = inf.id ? String(inf.id) : null;
+                    const internalId = inf.__internalId ? String(inf.__internalId) : null;
+                    return candidateId === desiredId || internalId === desiredId;
+                });
+                if (match && match.__internalId) {
+                    defaultSelectionValue = match.__internalId;
+                }
+            }
             
             // Construir lista de seleção
             const listEl = document.getElementById('infractionSelectionList');
@@ -2584,12 +2646,14 @@ class EducaFlowPro {
                         listEl.appendChild(item);
                     });
                 
-                const firstRadio = listEl.querySelector('input[name="selectedInfraction"]');
-                    if (firstRadio) {
-                        firstRadio.checked = true;
+                    if (!listEl.querySelector('input[name="selectedInfraction"]:checked')) {
+                        const firstRadio = listEl.querySelector('input[name="selectedInfraction"]');
+                        if (firstRadio) {
+                            firstRadio.checked = true;
+                        }
                     }
                 }
-            }
+            }   
             // Mostrar modal
             const modal = document.getElementById('infractionSelectModal');
             if (modal) modal.classList.remove('hidden');
