@@ -67,6 +67,7 @@
                 </div>
                 <p>Sistema Completo de Gestão Escolar</p>
                 <span class="version">v2.0</span>
+                <p class="developer-credit">Desenvolvido por Sergio Souza</p>
             </div>
             <div class="login__content">
                 <h2>Faça login para continuar</h2>
@@ -111,6 +112,7 @@
                 </div>
             </div>
             <div class="header__right">
+                <div class="developer-credit developer-credit--header">Desenvolvido por Sergio Souza</div>
                 <div class="user-info">
                     <img id="userPhoto" class="user-photo" src="" alt="Foto de usuário">
                     <span id="userName"></span>
@@ -129,12 +131,41 @@
             <!-- Removed separate Statistics button; the dashboard now includes statistics -->
             <!-- <button class="nav-btn" data-tab="statistics">📊 Estatísticas</button> -->
             <button class="nav-btn" data-tab="reports">📋 Relatórios</button>
+            <button class="nav-btn" data-tab="about">ℹ️ Sobre</button>
             <!-- Botão de Configurações (visível apenas para administradores) -->
             <button class="nav-btn" id="settingsNavBtn" data-tab="settings">⚙️ Configurações</button>
         </nav>
 
         <!-- Content Area -->
         <main class="dashboard__content">
+            <!-- About Tab -->
+            <div id="tab-about" class="tab-content">
+                <div class="section-header">
+                    <h2>ℹ️ Sobre o EducaFlow Pro</h2>
+                    <p>Conheça a plataforma, seus objetivos e o educador por trás do projeto.</p>
+                </div>
+                <div class="about-grid">
+                    <section class="about-card">
+                        <h3>O Programa</h3>
+                        <p>O EducaFlow Pro é uma solução completa para registrar, acompanhar e analisar ocorrências disciplinares no ambiente escolar. O sistema integra cadastro de alunos, turmas, responsáveis e relatórios detalhados para apoiar decisões pedagógicas.</p>
+                        <ul>
+                            <li>Painel unificado com indicadores em tempo real.</li>
+                            <li>Gestão de infrações com filtros avançados e exportações.</li>
+                            <li>Relatórios pedagógicos personalizáveis para reuniões e conselhos.</li>
+                        </ul>
+                    </section>
+                    <section class="about-card">
+                        <h3>O Desenvolvedor</h3>
+                        <p>O sistema foi idealizado e desenvolvido por <strong>Sergio Souza</strong>, educador comprometido com a melhoria contínua da gestão escolar e da convivência em sala de aula.</p>
+                        <div class="about-contact">
+                            <h4>Contato</h4>
+                            <p>Entre em contato diretamente por e-mail: <a href="mailto:oprof.sergio@gmail.com">oprof.sergio@gmail.com</a></p>
+                            <p>Feedbacks, sugestões e parcerias são muito bem-vindos.</p>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
             <!-- Overview Tab -->
             <div id="tab-overview" class="tab-content active">
                 <div class="stats-grid">
