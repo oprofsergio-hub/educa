@@ -129,6 +129,7 @@ class EducaFlowPro {
         // redirect quando o navegador não suporta armazenamento web.
         this.authPersistence = 'local';
         this.disableRedirectLogin = false;
+        this.skipInitialDataLoad = false;
 
         // Configuração Firebase REAL
         this.firebaseConfig = {
@@ -1055,15 +1056,28 @@ class EducaFlowPro {
     }
 
     showDashboard() {
-        document.getElementById('login').classList.add('hidden');
-        document.getElementById('dashboard').classList.remove('hidden');
-        
+const loginEl = document.getElementById('login');
+        const dashboardEl = document.getElementById('dashboard');
+        if (loginEl && loginEl.classList) {
+            loginEl.classList.add('hidden');
+        }
+        if (dashboardEl && dashboardEl.classList) {
+            dashboardEl.classList.remove('hidden');
+        }
+
         if (this.isDemoMode) {
-            document.getElementById('demoIndicator').classList.remove('hidden');
+            const demoIndicator = document.getElementById('demoIndicator');
+            if (demoIndicator && demoIndicator.classList) {
+                demoIndicator.classList.remove('hidden');
+            }
         }
         
         this.updateUserInfo();
-        this.loadDashboardData();
+        if (this.skipInitialDataLoad) {
+            console.warn('⚠️ Dados do dashboard não carregados devido à indisponibilidade do Firebase.');
+        } else {
+            this.loadDashboardData();
+        }
         this.initializeEventListeners();
 
         // Garante que o logotipo seja exibido corretamente no dashboard
@@ -1081,6 +1095,11 @@ class EducaFlowPro {
     }
 
     async loadDashboardData() {
+        if (this.skipInitialDataLoad) {
+            console.warn('⚠️ Execução de carregamento inicial do dashboard pulada.');
+            return;
+        }
+        
         console.log('📊 Carregando dados do dashboard...');
         
         try {
@@ -1661,7 +1680,7 @@ class EducaFlowPro {
         const safeType = this.escapeHtml(rawType);
         const severityKey = (infraction?.gravidade || 'leve').toLowerCase();
         const severityLabel = this.escapeHtml(this.getGravidadeLabel(severityKey));
-        onst date = this.parseLocalDate(infraction?.data);
+        const date = this.parseLocalDate(infraction?.data);
         const formattedDate = date ? date.toLocaleDateString('pt-BR') : 'Data não informada';
         
         row.innerHTML = `
@@ -2070,6 +2089,10 @@ class EducaFlowPro {
     }
 
     initializeEventListeners() {
+        if (!document || typeof document.querySelectorAll !== 'function' || typeof document.querySelector !== 'function') {
+            console.warn('⚠️ DOM indisponível para registrar event listeners.');
+            return;
+        }
         // BUGFIX: Navegação por tabs corrigida
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -4166,9 +4189,14 @@ class EducaFlowPro {
             this.config.defaultPedagogicalText = '';
             this.config.tagline = 'Transformando a disciplina em excelência';
             this.applyTagline();
-
-        // Atualiza o logotipo para usar a data URI, garantindo que a imagem sempre seja exibida
-        this.applyLogo();
+            // Atualiza o logotipo para usar a data URI, garantindo que a imagem sempre seja exibida
+            this.applyLogo();
+            return;
+        }
+        if (!this.database) {
+            console.warn('⚠️ Realtime Database indisponível. Mantendo configurações padrão.');
+            this.applyTagline();
+            this.applyLogo();
             return;
         }
         try {
@@ -4224,6 +4252,17 @@ class EducaFlowPro {
             this.showLogin();
             return;
         }
+        if (!this.database || typeof firebase === 'undefined' || !firebase?.database) {
+            console.warn('⚠️ Firebase indisponível. Pulando verificação detalhada de permissões.');
+            await this.loadAppConfig();
+            this.isDemoMode = true;
+            this.isAdmin = true;
+            this.skipInitialDataLoad = true;
+            this.updateSettingsNav();
+            this.showDashboard();
+            return;
+        }
+
         try {
            const email = this.currentUser.email || '';
             const name = this.currentUser.displayName || '';
