@@ -705,7 +705,7 @@ class EducaFlowPro {
                 const redirectResult = await this.auth.getRedirectResult();
                 if (redirectResult && redirectResult.user) {
                     console.log('🎯 Resultado de login via redirect processado:', redirectResult.user.email);
-                await this.handleAuthenticatedUser(redirectResult.user, {
+                    await this.handleAuthenticatedUser(redirectResult.user, {
                         fromRedirect: true,
                         force: true,
                         silentOnError: true,
@@ -714,7 +714,7 @@ class EducaFlowPro {
             } catch (redirectError) {
                 // Em alguns navegadores, getRedirectResult pode lançar se não houver resultado
                 console.warn('⚠️ Erro ao obter resultado de redirect:', redirectError);
-            const friendlyMessage = this.getFriendlyLoginError(redirectError);
+                const friendlyMessage = this.getFriendlyLoginError(redirectError);
                 const toastType = redirectError?.code === 'auth/unauthorized-domain' ? 'error' : 'warning';
                 this.showLoginError(friendlyMessage);
                 this.showToast(friendlyMessage, toastType);
