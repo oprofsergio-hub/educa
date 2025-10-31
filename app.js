@@ -577,6 +577,40 @@ class EducaFlowPro {
             .replace(/'/g, '&#39;');
     }
 
+    parseLocalDate(dateInput) {
+        if (!dateInput && dateInput !== 0) return null;
+
+        if (dateInput instanceof Date) {
+            return Number.isNaN(dateInput.getTime()) ? null : dateInput;
+        }
+
+        if (typeof dateInput === 'number') {
+            const numericDate = new Date(dateInput);
+            return Number.isNaN(numericDate.getTime()) ? null : numericDate;
+        }
+
+        const raw = String(dateInput).trim();
+        if (!raw) return null;
+
+        const datePart = raw.split('T')[0];
+        const parts = datePart.split('-');
+        if (parts.length === 3) {
+            const [year, month, day] = parts.map(Number);
+            if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
+                const parsed = new Date(year, month - 1, day);
+                return Number.isNaN(parsed.getTime()) ? null : parsed;
+            }
+        }
+
+        const fallback = new Date(raw);
+        return Number.isNaN(fallback.getTime()) ? null : fallback;
+    }
+
+    formatLocalDate(dateInput, locale = 'pt-BR') {
+        const date = this.parseLocalDate(dateInput);
+        return date ? date.toLocaleDateString(locale) : 'Data não informada';
+    }
+
     hideLoginError() {
         const loginError = document.getElementById('loginError');
         if (loginError) {
@@ -1598,7 +1632,14 @@ class EducaFlowPro {
                     }
                 }
                 
-                infractions.sort((a, b) => new Date(b.data) - new Date(a.data));
+                infractions.sort((a, b) => {
+                    const dateB = this.parseLocalDate(b?.data);
+                    const dateA = this.parseLocalDate(a?.data);
+                    if (!dateB && !dateA) return 0;
+                    if (!dateB) return 1;
+                    if (!dateA) return -1;
+                    return dateB - dateA;
+                });
                 
                 infractions.forEach(infraction => {
                     const row = this.createInfractionRow(infraction.id, infraction);
@@ -1620,10 +1661,8 @@ class EducaFlowPro {
         const safeType = this.escapeHtml(rawType);
         const severityKey = (infraction?.gravidade || 'leve').toLowerCase();
         const severityLabel = this.escapeHtml(this.getGravidadeLabel(severityKey));
-        const date = infraction?.data ? new Date(infraction.data) : null;
-        const formattedDate = date && !Number.isNaN(date.getTime())
-            ? date.toLocaleDateString('pt-BR')
-            : 'Data não informada';
+        onst date = this.parseLocalDate(infraction?.data);
+        const formattedDate = date ? date.toLocaleDateString('pt-BR') : 'Data não informada';
         
         row.innerHTML = `
            <td>${formattedDate}</td>
@@ -1675,8 +1714,8 @@ class EducaFlowPro {
             const infractions = await this.getAllInfractions();
             const monthCounts = new Array(12).fill(0);
             infractions.forEach(inf => {
-                const d = new Date(inf.data);
-                if (!isNaN(d)) {
+                const d = this.parseLocalDate(inf?.data);
+                if (d) {
                     const m = d.getMonth();
                     monthCounts[m] = (monthCounts[m] || 0) + 1;
                 }
@@ -1752,8 +1791,8 @@ class EducaFlowPro {
             const currentMonth = now.getMonth();
             const currentYear = now.getFullYear();
             infractions.forEach(inf => {
-                const d = new Date(inf.data);
-                if (!isNaN(d) && d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
+                const d = this.parseLocalDate(inf?.data);
+                if (d && d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
                     const index = Math.floor((d.getDate() - 1) / 7);
                     if (index >= 0 && index < 4) weekCounts[index] += 1;
                 }
@@ -1796,8 +1835,8 @@ class EducaFlowPro {
             typeLabels.forEach(t => { currentCounts[t] = 0; prevCounts[t] = 0; });
             infractions.forEach(inf => {
                 const tipo = inf.tipo;
-                const d = new Date(inf.data);
-                if (!typeLabels.includes(tipo) || isNaN(d)) return;
+                const d = this.parseLocalDate(inf?.data);
+                if (!typeLabels.includes(tipo) || !d) return;
                 if (d.getFullYear() === currentYear && d.getMonth() === currentMonth) {
                     currentCounts[tipo] += 1;
                 } else if (d.getFullYear() === prevYear && d.getMonth() === prevMonth) {
@@ -2668,7 +2707,14 @@ class EducaFlowPro {
             const infractions = await this.getStudentInfractions(studentName);
             const normalizedInfractions = Array.isArray(infractions)
                 ? infractions.map((inf, index) => ({ ...inf, __internalId: inf.id || `__local-${index}` }))
-                    .sort((a, b) => new Date(a.data) - new Date(b.data))
+                    .sort((a, b) => {
+                        const dateA = this.parseLocalDate(a?.data);
+                        const dateB = this.parseLocalDate(b?.data);
+                        if (!dateA && !dateB) return 0;
+                        if (!dateA) return 1;
+                        if (!dateB) return -1;
+                        return dateA - dateB;
+                    })
                 : [];
             this.currentReportInfractions = normalizedInfractions;
 
@@ -2705,7 +2751,7 @@ class EducaFlowPro {
                     listEl.appendChild(allOption);
 
                     displayInfractions.forEach((inf) => {
-                        const dateText = inf.data ? new Date(inf.data).toLocaleDateString('pt-BR') : 'Data não informada';
+                        const dateText = this.formatLocalDate(inf?.data);
                         const severityLabel = this.getGravidadeLabel(inf.gravidade);
                         const item = document.createElement('label');
                         item.className = 'selection-item';
@@ -2915,7 +2961,8 @@ class EducaFlowPro {
                 ensureSpace(2);
                 doc.setFont('helvetica', 'bold');
                 doc.setFontSize(11);
-                const occurrenceDate = inf.data ? new Date(inf.data).toLocaleDateString('pt-BR') : '__/__/____';
+                const occurrenceDateObj = this.parseLocalDate(inf?.data);
+                const occurrenceDate = occurrenceDateObj ? occurrenceDateObj.toLocaleDateString('pt-BR') : '__/__/____';
                 const occurrenceTime = inf.horario ? ` às ${inf.horario}` : '';
                 doc.text(`${index + 1}ª ocorrência - ${occurrenceDate}${occurrenceTime}`, margin, y);
                 addSpacing(lineHeight);
@@ -3907,12 +3954,22 @@ class EducaFlowPro {
         }
         // Período personalizado
         if (startDate) {
-            const start = new Date(startDate);
-            infractions = infractions.filter(inf => new Date(inf.data) >= start);
+            const start = this.parseLocalDate(startDate);
+            if (start) {
+                infractions = infractions.filter(inf => {
+                    const infDate = this.parseLocalDate(inf?.data);
+                    return infDate && infDate >= start;
+                });
+            }
         }
         if (endDate) {
-            const end = new Date(endDate);
-            infractions = infractions.filter(inf => new Date(inf.data) <= end);
+            const end = this.parseLocalDate(endDate);
+            if (end) {
+                infractions = infractions.filter(inf => {
+                    const infDate = this.parseLocalDate(inf?.data);
+                    return infDate && infDate <= end;
+                });
+            }
         }
         return infractions;
     }
@@ -3952,7 +4009,7 @@ class EducaFlowPro {
                     doc.addPage();
                     y = 20;
                 }
-                const dateStr = new Date(inf.data).toLocaleDateString('pt-BR');
+                const dateStr = this.formatLocalDate(inf?.data);
                 const gravidadeLabel = this.getGravidadeLabel(inf.gravidade);
                 const line = `${idx + 1}. ${dateStr} - ${inf.aluno} - ${inf.turma || 'N/A'} - ${inf.tipo} (${gravidadeLabel})`;
                 doc.text(line, 10, y);
@@ -5430,17 +5487,17 @@ function applyFilters() {
     }
 
     // Conversão de string para objetos Date para comparação
-    const startObj = startDate ? new Date(startDate) : null;
-    const endObj = endDate ? new Date(endDate) : null;
+    const startObj = startDate && window.app ? window.app.parseLocalDate(startDate) : null;
+    const endObj = endDate && window.app ? window.app.parseLocalDate(endDate) : null;
 
     async function filterInfractions() {
         if (!window.app) return [];
         const all = await window.app.getAllInfractions();
         return all.filter(inf => {
             // Data
-            const infDate = new Date(inf.data);
-            if (startObj && infDate < startObj) return false;
-            if (endObj && infDate > endObj) return false;
+            const infDate = window.app ? window.app.parseLocalDate(inf?.data) : null;
+            if (startObj && (!infDate || infDate < startObj)) return false;
+            if (endObj && (!infDate || infDate > endObj)) return false;
             // Gravidade
             if (gravityFilters.length && !gravityFilters.includes(inf.gravidade)) return false;
             // Turma
@@ -5467,7 +5524,7 @@ function applyFilters() {
             } else {
                 let tableRows = '';
                 filtered.forEach(inf => {
-                    const dateStr = new Date(inf.data).toLocaleDateString('pt-BR');
+                     const dateStr = window.app ? window.app.formatLocalDate(inf?.data) : 'Data não informada';
                     tableRows += `<tr>
                         <td>${dateStr}</td>
                         <td>${inf.aluno}</td>
@@ -5560,7 +5617,7 @@ function exportFilteredData(format) {
         window.app.showToast('Gerando planilha Excel...', 'info');
         // Preparar dados para planilha
         const data = results.map(inf => ({
-            Data: new Date(inf.data).toLocaleDateString('pt-BR'),
+            Data: window.app ? window.app.formatLocalDate(inf?.data) : 'Data não informada',
             Aluno: inf.aluno,
             Turma: inf.turma || '',
             Tipo: inf.tipo,
