@@ -2023,6 +2023,23 @@ const loginEl = document.getElementById('login');
                 });
             }
         });
+
+        const multiSelect = document.getElementById('infractionStudentMulti');
+        if (multiSelect) {
+            const previouslySelected = new Set(Array.from(multiSelect.selectedOptions || []).map(option => option.value));
+            multiSelect.innerHTML = '';
+            orderedStudents.forEach(student => {
+                const option = document.createElement('option');
+                option.value = student.nome;
+                option.textContent = `${student.nome} (${student.turma})`;
+                if (previouslySelected.has(option.value)) {
+                    option.selected = true;
+                }
+                multiSelect.appendChild(option);
+            });
+            const displayCount = Math.min(Math.max(orderedStudents.length, 4), 10);
+            multiSelect.size = displayCount;
+        }
     }
 
     populateReportSelects() {
@@ -2113,16 +2130,9 @@ const loginEl = document.getElementById('login');
         this.setupModals();
         this.setupForms();
         
-        // Configurar datas atuais
-        const today = new Date().toISOString().split('T')[0];
-        const now = new Date();
-        const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-        
-        const infractionDate = document.getElementById('infractionDate');
-        const infractionTime = document.getElementById('infractionTime');
-        
-        if (infractionDate) infractionDate.value = today;
-        if (infractionTime) infractionTime.value = currentTime;
+        // Configurar campos da infração com valores padrão
+        this.setInfractionDateTimeDefaults({ force: true });
+        this.handleMultiStudentToggle(false, { skipToggleUpdate: true });
         
         // Event listener para ESC key
         document.addEventListener('keydown', (e) => {
@@ -2410,6 +2420,13 @@ const loginEl = document.getElementById('login');
         if (saveInfractionBtn) {
             saveInfractionBtn.onclick = () => this.saveInfraction();
         }
+
+        const multiStudentToggle = document.getElementById('infractionMultiToggle');
+        if (multiStudentToggle) {
+            multiStudentToggle.addEventListener('change', (event) => {
+                this.handleMultiStudentToggle(Boolean(event.target.checked), { skipToggleUpdate: true });
+            });
+        }
     }
 
     // CORREÇÃO CRÍTICA: Salvamento funcional no Firebase
@@ -2546,117 +2563,306 @@ const loginEl = document.getElementById('login');
     }
 
     async saveInfraction() {
-        const student = document.getElementById('infractionStudent').value;
+        if (this.editingInfractionId) {
+            await this.updateInfraction();
+            return;
+        }
+        this.setInfractionDateTimeDefaults();
+
+        const selectedStudents = this.getSelectedInfractionStudents();
+        const isMultiMode = this.isMultiStudentModeEnabled();
         const type = document.getElementById('infractionType').value;
         const severity = document.getElementById('infractionSeverity').value;
-        const date = document.getElementById('infractionDate').value;
-        const time = document.getElementById('infractionTime').value;
+        const date = this.getNormalizedDateValue('infractionDate');
+        const time = this.getNormalizedTimeValue('infractionTime');
         const responsibleType = document.getElementById('responsibleType').value;
-        const responsibleName = document.getElementById('responsibleName').value;
-        const description = document.getElementById('infractionDescription').value;
-        const measures = document.getElementById('infractionMeasures').value;
+        const responsibleName = (document.getElementById('responsibleName').value || '').trim();
+        const description = (document.getElementById('infractionDescription').value || '').trim();
+        const measures = (document.getElementById('infractionMeasures').value || '').trim();
 
-        if (!student || !type || !severity || !date || !time || !description) {
+        if (isMultiMode) {
+            this.setFieldValidity('infractionStudent', true);
+            this.setFieldValidity('infractionStudentMulti', selectedStudents.length > 0);
+        } else {
+            this.setFieldValidity('infractionStudent', selectedStudents.length > 0);
+            this.setFieldValidity('infractionStudentMulti', true);
+        }
+
+        if (!selectedStudents.length) {
+            this.showToast('Selecione pelo menos um aluno', 'error');
+            return;
+        }
+
+        this.setFieldValidity('infractionType', Boolean(type));
+        this.setFieldValidity('infractionSeverity', Boolean(severity));
+        this.setFieldValidity('infractionDescription', Boolean(description));
+
+        if (!type || !severity || !description) {
             this.showToast('Preencha todos os campos obrigatórios', 'error');
             return;
         }
 
-        if (responsibleType && !responsibleName) {
-            this.showToast('Digite o nome do responsável', 'error');
+        this.setFieldValidity('infractionDate', Boolean(date));
+        if (!date) {
+            this.showToast('Informe uma data válida para a infração', 'error');
             return;
         }
 
+        this.setFieldValidity('infractionTime', Boolean(time));
+        if (!time) {
+            this.showToast('Informe um horário válido para a infração', 'error');
+            return;
+        }
+
+        if (responsibleType) {
+            this.setFieldValidity('responsibleName', Boolean(responsibleName));
+            if (!responsibleName) {
+                this.showToast('Digite o nome do responsável', 'error');
+                return;
+            }
+        } else {
+            this.setFieldValidity('responsibleName', true);
+        }
+        
         try {
-            // Buscar dados do aluno para obter a turma correta e o ID do aluno
-            let turma = 'N/A';
-            let studentId = null;
-            try {
-                const studentDataObj = await this.findStudentDataByName(student);
-                if (studentDataObj) {
-                    studentId = studentDataObj.id || null;
-                    if (studentDataObj.turma) {
-                        turma = studentDataObj.turma;
-                    }
+            let ownerId = null;
+            if (!this.isDemoMode) {
+                ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
+                if (!ownerId || !this.database) {
+                    throw new Error('Não foi possível identificar o proprietário dos dados.');
                 }
-            } catch (e) {
-                console.error('Erro ao obter dados do aluno:', e);
             }
+            
             const responsible = responsibleName || 'Não informado';
+            const processedStudents = [];
+            
+            for (const [index, studentName] of selectedStudents.entries()) {
+                try {
+                    let turma = 'N/A';
+                    let studentId = null;
+                    try {
+                        const studentDataObj = await this.findStudentDataByName(studentName);
+                        if (studentDataObj) {
+                            studentId = studentDataObj.id || null;
+                            if (studentDataObj.turma) {
+                                turma = studentDataObj.turma;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Erro ao obter dados do aluno:', e);
+                    }
 
-            if (this.isDemoMode) {
-                const newInfraction = {
-                    id: Date.now().toString(),
-                    aluno: student,
-                    tipo: type,
-                    gravidade: severity,
-                    data: date,
-                    horario: time,
-                    responsavelTipo: responsibleType,
-                    responsavel: responsible,
-                    descricao: description,
-                    medidas: measures,
-                    turma: turma,
-                    studentId: studentId
-                };
-                this.demoData.infractions.unshift(newInfraction);
+                    if (this.isDemoMode) {
+                        const newInfraction = {
+                            id: `${Date.now()}-${index}`,
+                            aluno: studentName,
+                            tipo: type,
+                            gravidade: severity,
+                            data: date,
+                            horario: time,
+                            responsavelTipo: responsibleType,
+                            responsavel: responsible,
+                            descricao: description,
+                            medidas: measures,
+                            turma,
+                            studentId
+                        };
+                        this.demoData.infractions.unshift(newInfraction);
 
-                // Atualizar contador do aluno
-                const studentData = this.findStudentByName(student);
-                if (studentData) {
-                    studentData.infracoes = (studentData.infracoes || 0) + 1;
+                        const studentData = this.findStudentByName(studentName);
+                        if (studentData) {
+                            studentData.infracoes = (studentData.infracoes || 0) + 1;
+                        }
+                    } else {
+                        const infractionRef = this.database.ref(`users/${ownerId}/infractions`).push();
+
+                        await infractionRef.set({
+                            aluno: studentName,
+                            tipo: type,
+                            gravidade: severity,
+                            data: date,
+                            horario: time,
+                            responsavelTipo: responsibleType,
+                            responsavel: responsible,
+                            descricao: description,
+                            medidas: measures,
+                            turma,
+                            studentId,
+                            createdAt: firebase.database.ServerValue.TIMESTAMP,
+                            id: infractionRef.key
+                        });
+
+                        console.log('✅ Infração salva no Firebase:', infractionRef.key);
+                    }
+
+                processedStudents.push({ studentId, studentName, severity });
+                } catch (studentError) {
+                    console.error(`Erro ao registrar infração para ${studentName}:`, studentError);
+                    const errorMessage = studentError && studentError.message ? `: ${studentError.message}` : '';
+                    this.showToast(`Erro ao registrar infração para ${studentName}${errorMessage}`, 'error');
                 }
-            } else {
-                // SALVAMENTO REAL NO FIREBASE
-                // Grava a infração no path compartilhado do proprietário dos dados
-                const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
-                const infractionRef = this.database.ref(`users/${ownerId}/infractions`).push();
-
-                await infractionRef.set({
-                    aluno: student,
-                    tipo: type,
-                    gravidade: severity,
-                    data: date,
-                    horario: time,
-                    responsavelTipo: responsibleType,
-                    responsavel: responsible,
-                    descricao: description,
-                    medidas: measures,
-                    turma: turma,
-                    studentId: studentId,
-                    createdAt: firebase.database.ServerValue.TIMESTAMP,
-                    id: infractionRef.key
-                });
-
-                console.log('✅ Infração salva no Firebase:', infractionRef.key);
+                }
+           
+                if (!processedStudents.length) {
+                this.showToast('Não foi possível registrar a infração. Verifique os dados e tente novamente.', 'error');
+                return;
             }
 
-            // Salvar responsável se novo
             if (responsibleType && responsibleName) {
                 this.addResponsibleToList(responsibleType, responsibleName);
             }
 
-            document.getElementById('infractionModal').classList.add('hidden');
-            document.getElementById('infractionForm').reset();
-            document.getElementById('responsibleDetails').classList.add('hidden');
+            const modal = document.getElementById('infractionModal');
+            if (modal) modal.classList.add('hidden');
+            this.resetInfractionModal();
             
             this.invalidateInfractionSummary();
 
-            await this.afterInfractionSaved({ studentId, studentName: student, severity });
+           for (const processed of processedStudents) {
+                await this.afterInfractionSaved(processed);
+            }
 
             await this.loadInfractions();
             await this.loadStudents();
             await this.loadStatistics();
             await this.createHeatmaps();
             this.populateAllSelects();
+               
+            const successMessage = processedStudents.length === 1
+                ? `Infração registrada com sucesso para ${processedStudents[0].studentName}!`
+                : `Infração registrada com sucesso para ${processedStudents.length} alunos!`;
+            this.showToast(successMessage, 'success');
             
-            this.showToast('Infração registrada com sucesso!', 'success');
-
-            // Analisar a descrição usando IA após o registro
             await this.analyzeInfractionText(description);
 
         } catch (error) {
             console.error('❌ Erro ao salvar infração:', error);
             this.showToast(`Erro ao registrar infração: ${error.message}`, 'error');
+        }
+    }
+
+    isMultiStudentModeEnabled() {
+        const toggle = document.getElementById('infractionMultiToggle');
+        return Boolean(toggle && toggle.checked);
+    }
+
+    getSelectedInfractionStudents() {
+        if (this.isMultiStudentModeEnabled()) {
+            const multiSelect = document.getElementById('infractionStudentMulti');
+            if (!multiSelect) return [];
+            return Array.from(multiSelect.selectedOptions || [])
+                .map(option => option.value)
+                .filter(value => Boolean(value));
+        }
+        const singleSelect = document.getElementById('infractionStudent');
+        const value = singleSelect ? singleSelect.value : '';
+        return value ? [value] : [];
+    }
+
+    setFieldValidity(inputId, isValid) {
+        const field = document.getElementById(inputId);
+        if (!field) return;
+        if (isValid) {
+            field.classList.remove('input-error');
+        } else {
+            field.classList.add('input-error');
+        }
+    }
+
+    setInfractionDateTimeDefaults(options = {}) {
+        const { force = false } = options || {};
+        const dateInput = document.getElementById('infractionDate');
+        const timeInput = document.getElementById('infractionTime');
+
+        if (dateInput) {
+            const currentValue = (dateInput.value || '').trim();
+            if (force || !this.isValidDateValue(currentValue)) {
+                const today = new Date().toISOString().split('T')[0];
+                dateInput.value = today;
+            }
+        }
+
+        if (timeInput) {
+            const currentValue = (timeInput.value || '').trim();
+            if (force || !this.isValidTimeValue(currentValue)) {
+                const now = new Date();
+                const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                timeInput.value = currentTime;
+            }
+        }
+    }
+
+    getNormalizedDateValue(inputId) {
+        const input = document.getElementById(inputId);
+        if (!input) return '';
+        const rawValue = (input.value || '').trim();
+        if (this.isValidDateValue(rawValue)) {
+            return rawValue;
+        }
+        if (input.valueAsDate instanceof Date && !Number.isNaN(input.valueAsDate?.getTime())) {
+            return input.valueAsDate.toISOString().split('T')[0];
+        }
+        if (rawValue) {
+            const parsed = new Date(rawValue);
+            if (!Number.isNaN(parsed.getTime())) {
+                return parsed.toISOString().split('T')[0];
+            }
+        }
+        return '';
+    }
+
+    getNormalizedTimeValue(inputId) {
+        const input = document.getElementById(inputId);
+        if (!input) return '';
+        const rawValue = (input.value || '').trim();
+        if (this.isValidTimeValue(rawValue)) {
+            return rawValue;
+        }
+        if (typeof input.valueAsNumber === 'number' && !Number.isNaN(input.valueAsNumber)) {
+            const totalMinutes = Math.round(input.valueAsNumber / 60000);
+            const hours = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+            const minutes = String(totalMinutes % 60).padStart(2, '0');
+            return `${hours}:${minutes}`;
+        }
+        return '';
+    }
+
+    isValidDateValue(value) {
+        return /^\d{4}-\d{2}-\d{2}$/.test(value);
+    }
+
+    isValidTimeValue(value) {
+        return /^\d{2}:\d{2}$/.test(value);
+    }
+
+    handleMultiStudentToggle(enable, options = {}) {
+        const { skipToggleUpdate = false } = options || {};
+        const toggle = document.getElementById('infractionMultiToggle');
+        const singleGroup = document.getElementById('infractionStudentGroup');
+        const multiGroup = document.getElementById('infractionMultiGroup');
+        const multiSelect = document.getElementById('infractionStudentMulti');
+        const singleSelect = document.getElementById('infractionStudent');
+
+        if (toggle && !skipToggleUpdate) {
+            toggle.checked = Boolean(enable);
+        }
+
+        if (singleGroup) {
+            singleGroup.classList.toggle('hidden', Boolean(enable));
+        }
+
+        if (multiGroup) {
+            multiGroup.classList.toggle('hidden', !Boolean(enable));
+        }
+
+        if (enable) {
+            if (singleSelect) {
+                singleSelect.value = '';
+            }
+        } else if (multiSelect) {
+            Array.from(multiSelect.options || []).forEach(option => {
+                option.selected = false;
+            });
         }
     }
 
@@ -5101,6 +5307,7 @@ const loginEl = document.getElementById('login');
                 return;
             }
             this.editingInfractionId = id;
+            this.handleMultiStudentToggle(false);
             // Ajustar título
             const modal = document.getElementById('infractionModal');
             if (modal) {
@@ -5145,21 +5352,42 @@ const loginEl = document.getElementById('login');
         const student = document.getElementById('infractionStudent').value;
         const type = document.getElementById('infractionType').value;
         const severity = document.getElementById('infractionSeverity').value;
-        const date = document.getElementById('infractionDate').value;
-        const time = document.getElementById('infractionTime').value;
+        const date = this.getNormalizedDateValue('infractionDate');
+        const time = this.getNormalizedTimeValue('infractionTime');
         const responsibleType = document.getElementById('responsibleType').value;
-        const responsibleName = document.getElementById('responsibleName').value;
-        const description = document.getElementById('infractionDescription').value;
-        const measures = document.getElementById('infractionMeasures').value;
+        const responsibleName = (document.getElementById('responsibleName').value || '').trim();
+        const description = (document.getElementById('infractionDescription').value || '').trim();
+        const measures = (document.getElementById('infractionMeasures').value || '').trim();
         
         if (!id) return;
-        if (!student || !type || !severity || !date || !time || !description) {
+        this.setFieldValidity('infractionStudent', Boolean(student));
+        this.setFieldValidity('infractionStudentMulti', true);
+        this.setFieldValidity('infractionType', Boolean(type));
+        this.setFieldValidity('infractionSeverity', Boolean(severity));
+        this.setFieldValidity('infractionDescription', Boolean(description));
+        this.setFieldValidity('infractionDate', Boolean(date));
+        this.setFieldValidity('infractionTime', Boolean(time));
+
+        if (!student || !type || !severity || !description) {
             this.showToast('Preencha todos os campos obrigatórios', 'error');
             return;
         }
-        if (responsibleType && !responsibleName) {
-            this.showToast('Digite o nome do responsável', 'error');
+        if (!date) {
+            this.showToast('Informe uma data válida para a infração', 'error');
             return;
+        }
+        if (!time) {
+            this.showToast('Informe um horário válido para a infração', 'error');
+            return;
+        }
+        if (responsibleType) {
+            this.setFieldValidity('responsibleName', Boolean(responsibleName));
+            if (!responsibleName) {
+                this.showToast('Digite o nome do responsável', 'error');
+                return;
+            }
+        } else {
+            this.setFieldValidity('responsibleName', true);
         }
         
         try {
@@ -5208,17 +5436,11 @@ const loginEl = document.getElementById('login');
                 await infractionRef.update(payload);
             }
            
-            this.editingInfractionId = null;
             const modal = document.getElementById('infractionModal');
             if (modal) {
                 modal.classList.add('hidden');
-                const header = modal.querySelector('.modal__header h3');
-                if (header) header.textContent = 'Registrar Nova Infração';
             }
-            const form = document.getElementById('infractionForm');
-            if (form) form.reset();
-            const details = document.getElementById('responsibleDetails');
-            if (details) details.classList.add('hidden');
+            this.resetInfractionModal();
 
             this.invalidateInfractionSummary();
             const summary = await this.getInfractionsSummary({ forceRefresh: true });
@@ -5352,6 +5574,11 @@ const loginEl = document.getElementById('login');
         if (form) form.reset();
         const details = document.getElementById('responsibleDetails');
         if (details) details.classList.add('hidden');
+        this.handleMultiStudentToggle(false);
+        this.setInfractionDateTimeDefaults({ force: true });
+        ['infractionDate', 'infractionTime', 'infractionStudent', 'infractionStudentMulti',
+            'infractionType', 'infractionSeverity', 'infractionDescription', 'responsibleName']
+            .forEach(fieldId => this.setFieldValidity(fieldId, true));
     }
 
     /**
