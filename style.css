@@ -560,6 +560,29 @@ select.form-control {
   margin-bottom: var(--space-16);
 }
 
+.form-hint {
+  margin-top: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.form-label.form-label--checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  cursor: pointer;
+}
+
+.form-label.form-label--checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+.form-control.input-error {
+  border-color: var(--color-error);
+  box-shadow: 0 0 0 2px rgba(var(--color-error-rgb, 192, 21, 47), 0.15);
+}
+
 /* Card component */
 .card {
   background-color: var(--color-surface);
