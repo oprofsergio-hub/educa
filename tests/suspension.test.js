@@ -30,6 +30,41 @@ test('determineSuspensionDuration escalates correctly', () => {
   assert.strictEqual(EducaFlowPro.determineSuspensionDuration(1), 3);
   assert.strictEqual(EducaFlowPro.determineSuspensionDuration(2), 5);
   assert.strictEqual(EducaFlowPro.determineSuspensionDuration(10), 5);
+  assert.strictEqual(EducaFlowPro.determineSuspensionDuration(0, 2), 2);
+  assert.strictEqual(EducaFlowPro.determineSuspensionDuration(1, 2), 4);
+  assert.strictEqual(EducaFlowPro.determineSuspensionDuration(2, 2), 5);
+  assert.strictEqual(EducaFlowPro.determineSuspensionDuration(0, 3), 3);
+  assert.strictEqual(EducaFlowPro.determineSuspensionDuration(1, 3), 5);
+});
+
+test('evaluateSuspensionTrigger suggests suspension for leve accumulation', () => {
+  const app = new EducaFlowPro({ autoInit: false });
+  const result = app.evaluateSuspensionTrigger({
+    leveCount: 3,
+    mediaCount: 0,
+    graveCount: 0,
+    issuedSuspensions: 0,
+  });
+
+  assert.ok(result.shouldSuggest);
+  assert.strictEqual(result.baseDuration, 1);
+  assert.strictEqual(result.suggestedDuration, 1);
+  assert.match(result.reason, /3 infrações leves/);
+});
+
+test('evaluateSuspensionTrigger prioritises higher severity combinations', () => {
+  const app = new EducaFlowPro({ autoInit: false });
+  const result = app.evaluateSuspensionTrigger({
+    leveCount: 1,
+    mediaCount: 2,
+    graveCount: 0,
+    issuedSuspensions: 1,
+  });
+
+  assert.ok(result.shouldSuggest);
+  assert.strictEqual(result.baseDuration, 2);
+  assert.strictEqual(result.suggestedDuration, 4);
+  assert.match(result.reason, /infrações médias/);
 });
 
 test('formatTimeSlot maps minutes to half-hour windows', () => {
