@@ -508,7 +508,16 @@ class EducaFlowPro {
         tracker.studentName = tracker.studentName || name || '';
 
         const trigger = this.evaluateSuspensionTrigger(tracker);
-        const shouldSuggest = trigger.shouldSuggest && !tracker.awaitingReport;
+        const updatedCounts = {
+            leve: Number(tracker.leveCount) || 0,
+            media: Number(tracker.mediaCount) || 0,
+            grave: Number(tracker.graveCount) || 0,
+        };
+        const previousCounts = tracker.matchedCounts || { leve: 0, media: 0, grave: 0 };
+        const hasCountsChanged = previousCounts.leve !== updatedCounts.leve
+            || previousCounts.media !== updatedCounts.media
+            || previousCounts.grave !== updatedCounts.grave;
+        const shouldSuggest = trigger.shouldSuggest && (!tracker.awaitingReport || hasCountsChanged);
 
         if (shouldSuggest) {
             tracker.awaitingReport = true;
@@ -516,7 +525,9 @@ class EducaFlowPro {
             tracker.suggestedDuration = trigger.suggestedDuration;
             tracker.baseDuration = trigger.baseDuration || tracker.baseDuration || 1;
             tracker.triggerRuleId = trigger.ruleId || tracker.triggerRuleId || '';
-            tracker.matchedCounts = trigger.matchedCounts || tracker.matchedCounts || { leve: 0, media: 0, grave: 0 };
+            tracker.matchedCounts = trigger.matchedCounts
+                ? { ...trigger.matchedCounts }
+                : { ...updatedCounts };
             tracker.lastTriggeredAt = Date.now();
         }
 
@@ -531,7 +542,7 @@ class EducaFlowPro {
         baseDuration: shouldSuggest ? trigger.baseDuration : tracker.baseDuration || trigger.baseDuration || 1,
             ruleId: shouldSuggest ? trigger.ruleId : tracker.triggerRuleId || trigger.ruleId || null,
             promptMessage: shouldSuggest ? trigger.promptMessage : null,
-            matchedCounts: trigger.matchedCounts,
+            matchedCounts: trigger.matchedCounts || updatedCounts,
         };
     }
     
@@ -4068,6 +4079,12 @@ const loginEl = document.getElementById('login');
     }
 
     async generateSuspensionPdf({ studentName, className, reason, durationDays, letterText, summary }) {
+        const hasJsPdf = Boolean(window?.jspdf?.jsPDF);
+        if (!hasJsPdf) {
+            console.warn('⚠️ Biblioteca jsPDF não disponível para gerar suspensão.');
+            return false;
+        }
+        
         try {
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
@@ -4122,10 +4139,11 @@ const loginEl = document.getElementById('login');
             });
 
             const fileName = `suspensao-${studentName.replace(/\s+/g, '-')}-${Date.now()}.pdf`;
-            doc.save(fileName);            
+            doc.save(fileName);
+            return true;           
         } catch (error) {
             console.error('❌ Erro ao gerar PDF de suspensão:', error);
-            this.showToast('Não foi possível gerar o PDF da suspensão.', 'error');
+            return false;        
         }
     }
 
@@ -4269,7 +4287,7 @@ const loginEl = document.getElementById('login');
                 durationDays,
                 reason,
                 automatic: Boolean(automatic),
-                aseDuration: trackerData.baseDuration,
+                baseDuration: trackerData.baseDuration,
                 ruleId: trackerData.triggerRuleId,
                 matchedCounts: { ...trackerData.matchedCounts },
             });
@@ -4310,7 +4328,7 @@ const loginEl = document.getElementById('login');
                 }
             }
 
-            await this.generateSuspensionPdf({
+            const pdfGenerated = await this.generateSuspensionPdf({
                 studentName,
                 className: severitySummary?.className || '',
                 reason: reason || 'Suspensão recomendada',
@@ -4318,8 +4336,11 @@ const loginEl = document.getElementById('login');
                 letterText,
                 summary: severitySummary,
             });
-
-            this.showToast('Suspensão gerada com sucesso.', 'success');
+            if (pdfGenerated) {
+                this.showToast('Suspensão gerada com sucesso.', 'success');
+            } else {
+                this.showToast('Suspensão registrada, mas não foi possível gerar o PDF automaticamente.', 'warning');
+            }
         } catch (error) {
             console.error('❌ Erro ao registrar suspensão:', error);
             this.showToast('Erro ao registrar a suspensão.', 'error');
