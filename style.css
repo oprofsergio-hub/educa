@@ -1848,6 +1848,56 @@ tr:hover {
   padding: var(--space-20);
 }
 
+.modal__question {
+  margin: var(--space-16) 0 var(--space-10);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-error);
+}
+
+.suspension-history {
+  margin-top: var(--space-12);
+  padding: var(--space-12);
+  border-radius: var(--radius-md);
+  background: rgba(var(--color-warning-rgb), 0.08);
+  border: 1px solid rgba(var(--color-warning-rgb), 0.25);
+}
+
+.suspension-history p {
+  margin: 0 0 var(--space-8);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.suspension-history__empty {
+  margin-top: var(--space-12);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.suspension-history ul {
+  margin: 0;
+  padding-left: var(--space-20);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.suspension-history li {
+  list-style: disc;
+}
+
+.history-severity {
+  color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.history-extra {
+  font-style: italic;
+  color: var(--color-text-secondary);
+}
+
 .modal__footer {
   padding: var(--space-20);
   border-top: 1px solid var(--color-card-border-inner);
