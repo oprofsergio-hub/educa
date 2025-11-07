@@ -1,0 +1,12 @@
+{
+  "name": "educaflow-pro",
+  "version": "1.0.0",
+  "description": "EducaFlow Pro front-end bundle",
+  "main": "app.js",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT"
+}
