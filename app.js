@@ -1566,61 +1566,68 @@ const loginEl = document.getElementById('login');
     async loadStudents() {
         try {
             const tbody = document.getElementById('studentsTableBody');
-            if (tbody) {
-                tbody.innerHTML = '';
-                
-                let students = [];
-                if (this.isDemoMode) {
-                    students = this.demoData.students;
-                } else {
-                    const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
-                    if (ownerId) {
-                        const studentsRef = this.database.ref(`users/${ownerId}/students`);
-                        const snapshot = await studentsRef.once('value');
-                        if (snapshot.exists()) {
-                            snapshot.forEach((child) => {
-                                students.push({ id: child.key, ...child.val() });
-                            });
-                        }
-                    }
-                }
-                
-                students = this.sortStudentsByName(Array.isArray(students) ? students : []);
-                
-                // Atualiza o cache interno de alunos para busca rápida
-                this.studentsCache = [...students];
+            if (!tbody) {
+                return;
+            }
 
-                 const infractions = await this.getAllInfractions();
-                const summary = this.computeInfractionSummary(infractions, students);
-                this.cachedInfractionSummary = summary;
-                this.lastInfractionSummaryAt = Date.now();
+            tbody.innerHTML = '';
 
-                const pendingAlerts = [];
-                for (const student of students) {
-                    const counts = this.getStudentCountsFromSummary(summary, student);
-                    const key = this.getStudentStorageKey(student.id || null, student.nome);
-                    let tracker = null;
-                    if (key) {
-                        tracker = await this.fetchSuspensionTracker(key, {
-                            studentId: student.id || null,
-                            studentName: student.nome || '',
+            let students = [];
+            if (this.isDemoMode) {
+                students = this.demoData.students;
+            } else {
+                const ownerId = this.dataOwnerId || (this.currentUser ? this.currentUser.uid : null);
+                if (ownerId) {
+                    const studentsRef = this.database.ref(`users/${ownerId}/students`);
+                    const snapshot = await studentsRef.once('value');
+                    if (snapshot.exists()) {
+                        snapshot.forEach((child) => {
+                            students.push({ id: child.key, ...child.val() });
                         });
                     }
-                    const suggestion = this.prepareSuspensionSuggestion({
+                    }
+            }
+
+            students = this.sortStudentsByName(Array.isArray(students) ? students : []);
+
+            // Atualiza o cache interno de alunos para busca rápida
+            this.studentsCache = [...students];
+
+            const infractions = await this.getAllInfractions();
+            const summary = this.computeInfractionSummary(infractions, students);
+            this.cachedInfractionSummary = summary;
+            this.lastInfractionSummaryAt = Date.now();
+
+            const pendingAlerts = [];
+
+            for (const student of students) {
+                const counts = this.getStudentCountsFromSummary(summary, student);
+                const key = this.getStudentStorageKey(student.id || null, student.nome);
+                let tracker = null;
+
+                if (key) {
+                    tracker = await this.fetchSuspensionTracker(key, {
                         studentId: student.id || null,
                         studentName: student.nome || '',
-                        tracker,
-                        counts,
-                    if (suggestion) {
-                        pendingAlerts.push(suggestion);
-                    }
+                        });
                 }
 
-                this.syncSuspensionAlerts(pendingAlerts);
-                    const row = this.createStudentRow(student.id, student, counts, suggestion);
-                    tbody.appendChild(row);
+                const suggestion = this.prepareSuspensionSuggestion({
+                    studentId: student.id || null,
+                    studentName: student.nome || '',
+                    tracker,
+                    counts,
                 });
+
+                if (suggestion) {
+                    pendingAlerts.push(suggestion);
+                }
+
+                const row = this.createStudentRow(student.id, student, counts, suggestion);
+                tbody.appendChild(row);
             }
+
+            this.syncSuspensionAlerts(pendingAlerts);
         } catch (error) {
             console.error('❌ Erro ao carregar alunos:', error);
         }
