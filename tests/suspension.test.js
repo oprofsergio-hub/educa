@@ -67,6 +67,47 @@ test('evaluateSuspensionTrigger prioritises higher severity combinations', () =>
   assert.match(result.reason, /infrações médias/);
 });
 
+test('updateSuspensionCounters re-triggers suggestion when counts grow while awaiting report', async () => {
+  const app = new EducaFlowPro({ autoInit: false });
+  app.isDemoMode = true;
+  app.demoData = { suspensionTrackers: {} };
+  app.suspensionTrackers = new Map();
+
+  const first = await app.updateSuspensionCounters({ id: null, name: 'Aluno Teste' }, 'grave');
+  assert.ok(first.shouldSuggest);
+  assert.strictEqual(first.tracker.graveCount, 1);
+
+  const second = await app.updateSuspensionCounters({ id: null, name: 'Aluno Teste' }, 'grave');
+  assert.ok(second.shouldSuggest);
+  assert.strictEqual(second.tracker.graveCount, 2);
+  assert.strictEqual(second.matchedCounts.grave, 2);
+});
+
+test('generateSuspensionPdf returns false when jsPDF is unavailable', async () => {
+  const originalJsPdf = global.window.jspdf;
+  delete global.window.jspdf;
+
+  const app = new EducaFlowPro({ autoInit: false });
+  app.showToast = () => {};
+
+  const result = await app.generateSuspensionPdf({
+    studentName: 'Aluno Teste',
+    className: '7º A',
+    reason: 'Regra acionada',
+    durationDays: 3,
+    letterText: 'Teste de suspensão.',
+    summary: { leve: 0, media: 0, grave: 1, total: 1 },
+  });
+
+  assert.strictEqual(result, false);
+
+  if (originalJsPdf !== undefined) {
+    global.window.jspdf = originalJsPdf;
+  } else {
+    delete global.window.jspdf;
+  }
+});
+
 test('formatTimeSlot maps minutes to half-hour windows', () => {
   assert.strictEqual(EducaFlowPro.formatTimeSlot('07:15'), '07:00 - 07:29');
   assert.strictEqual(EducaFlowPro.formatTimeSlot('07:45'), '07:30 - 07:59');
