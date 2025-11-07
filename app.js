@@ -121,6 +121,7 @@ class EducaFlowPro {
         this.lastInfractionSummaryAt = 0;
         this.suspensionTrackers = new Map();
         this.pendingSuspensionSuggestion = null;
+        this.activeSuspensionAlerts = new Map();
 
         // Controle da persistência de autenticação. Define como o Firebase deve
         // armazenar a sessão do usuário e permite desabilitar fluxos baseados em
@@ -1594,8 +1595,29 @@ const loginEl = document.getElementById('login');
                 this.cachedInfractionSummary = summary;
                 this.lastInfractionSummaryAt = Date.now();
 
-                students.forEach(student => {
-                   const row = this.createStudentRow(student.id, student, summary);
+                const pendingAlerts = [];
+                for (const student of students) {
+                    const counts = this.getStudentCountsFromSummary(summary, student);
+                    const key = this.getStudentStorageKey(student.id || null, student.nome);
+                    let tracker = null;
+                    if (key) {
+                        tracker = await this.fetchSuspensionTracker(key, {
+                            studentId: student.id || null,
+                            studentName: student.nome || '',
+                        });
+                    }
+                    const suggestion = this.prepareSuspensionSuggestion({
+                        studentId: student.id || null,
+                        studentName: student.nome || '',
+                        tracker,
+                        counts,
+                    if (suggestion) {
+                        pendingAlerts.push(suggestion);
+                    }
+                }
+
+                this.syncSuspensionAlerts(pendingAlerts);
+                    const row = this.createStudentRow(student.id, student, counts, suggestion);
                     tbody.appendChild(row);
                 });
             }
@@ -1604,26 +1626,52 @@ const loginEl = document.getElementById('login');
         }
     }
 
-    createStudentRow(id, student, summary) {
+    createStudentRow(id, student, counts, suggestion = null) {
         const row = document.createElement('tr');
-        const counts = this.getStudentCountsFromSummary(summary, student);
         const badges = this.renderInfractionBadges(counts);
         const studentName = student?.nome || '';
         const safeStudentName = this.escapeHtml(studentName);
         const classLabel = this.escapeHtml(counts.className || student.turma || 'N/A');
+        const hasSuggestion = Boolean(suggestion);
 
+        const statusHtml = hasSuggestion
+            ? '<span class="status status--warning">Suspensão pendente</span>'
+            : '<span class="status status--active">Ativo</span>';
+
+        const indicator = hasSuggestion
+            ? '<span class="suspension-indicator" title="Suspensão sugerida">🚨</span>'
+            : '';
+
+        const suspensionButton = hasSuggestion
+            ? '<button type="button" class="btn btn--sm btn--danger student-suspension-btn">🚨 Suspensão</button>'
+            : '';
+        
         row.innerHTML = `
-            <td>${safeStudentName}</td>
+            <td class="student-name-cell">${safeStudentName}${indicator}</td>
             <td>${classLabel}</td>
             <td>${badges}</td>
-            <td><span class="status status--active">Ativo</span></td>
+            <td>${statusHtml}</td>
             <td class="action-cell">
+                ${suspensionButton}
                 <button type="button" class="btn btn--sm btn--primary student-report-btn">📄 Relatório</button>
                 <button class="btn btn--sm btn--outline" onclick="app.editStudent('${id}')">✏️ Editar</button>
                 <button class="btn btn--sm btn--outline" onclick="app.deleteStudent('${id}')">🗑️ Excluir</button>
             </td>
         `;
 
+        if (hasSuggestion) {
+            row.classList.add('student-row--alert');
+            const suspensionBtn = row.querySelector('.student-suspension-btn');
+            if (suspensionBtn) {
+                suspensionBtn.addEventListener('click', () => {
+                    this.openSuspensionModal({
+                        ...suggestion,
+                        automatic: false,
+                    });
+                });
+            }
+        }
+        
         const reportBtn = row.querySelector('.student-report-btn');
         if (reportBtn) {
             reportBtn.addEventListener('click', () => this.openReportSelectionModal(studentName));
@@ -3828,11 +3876,12 @@ const loginEl = document.getElementById('login');
             const result = await this.updateSuspensionCounters({ id: studentId, name: studentName }, severity);
             if (result && result.shouldSuggest) {
                 const summary = await this.getInfractionSummaryForStudent(studentId, studentName);
-                this.openSuspensionModal({
+                const tracker = this.normalizeSuspensionTracker(result.tracker || {}, { studentId, studentName });
+                const payload = {
                     studentId,
                     studentName,
                     trackerKey: result.key,
-                    tracker: result.tracker,
+                    tracker,
                     reason: result.reason,
                     suggestedDuration: result.suggestedDuration,
                     severitySummary: summary,
@@ -3841,7 +3890,9 @@ const loginEl = document.getElementById('login');
                     baseDuration: result.baseDuration,
                     ruleId: result.ruleId,
                     matchedCounts: result.matchedCounts,
-                });
+                };
+                this.upsertSuspensionAlert(payload);
+                this.openSuspensionModal(payload);
             }
         } catch (error) {
             console.warn('⚠️ Não foi possível processar os impactos da infração:', error);
@@ -4005,6 +4056,182 @@ const loginEl = document.getElementById('login');
             : '';
 
         return `<div class="suspension-history"><p>Advertências consideradas:</p><ul>${items.join('')}${extraLine}</ul></div>`;
+    }
+
+    prepareSuspensionSuggestion({ studentId = null, studentName = '', tracker = null, counts = null } = {}) {
+        const key = this.getStudentStorageKey(studentId, studentName);
+        if (!key || !studentName) {
+            return null;
+        }
+
+        const severitySummary = counts
+            ? {
+                ...counts,
+                infractions: Array.isArray(counts.infractions) ? [...counts.infractions] : [],
+            }
+            : {
+                total: 0,
+                leve: 0,
+                media: 0,
+                grave: 0,
+                infractions: [],
+                className: '',
+            };
+
+        const normalizedTracker = this.normalizeSuspensionTracker(tracker || {}, { studentId, studentName });
+        normalizedTracker.leveCount = severitySummary.leve || 0;
+        normalizedTracker.mediaCount = severitySummary.media || 0;
+        normalizedTracker.graveCount = severitySummary.grave || 0;
+        normalizedTracker.className = severitySummary.className || normalizedTracker.className || '';
+
+        const trigger = this.evaluateSuspensionTrigger(normalizedTracker);
+        const awaiting = Boolean(normalizedTracker.awaitingReport);
+        const shouldSuggest = awaiting || trigger.shouldSuggest;
+
+        if (!shouldSuggest) {
+            return null;
+        }
+
+        const baseDuration = normalizedTracker.baseDuration || trigger.baseDuration || 1;
+        const suggestedDuration = normalizedTracker.suggestedDuration
+            || trigger.suggestedDuration
+            || baseDuration;
+        const matchedCounts = normalizedTracker.matchedCounts
+            && (normalizedTracker.matchedCounts.leve
+                || normalizedTracker.matchedCounts.media
+                || normalizedTracker.matchedCounts.grave)
+            ? { ...normalizedTracker.matchedCounts }
+            : (trigger.matchedCounts || {
+                leve: severitySummary.leve || 0,
+                media: severitySummary.media || 0,
+                grave: severitySummary.grave || 0,
+            });
+
+        return {
+            studentId,
+            studentName,
+            trackerKey: key,
+            tracker: normalizedTracker,
+            reason: normalizedTracker.triggerReason || trigger.reason || 'Suspensão recomendada.',
+            suggestedDuration,
+            severitySummary,
+            automatic: false,
+            promptMessage: trigger.promptMessage || 'Deseja gerar a suspensão agora?',
+            baseDuration,
+            ruleId: normalizedTracker.triggerRuleId || trigger.ruleId || '',
+            matchedCounts,
+        };
+    }
+
+    buildSuspensionAlertElement(payload) {
+        const element = document.createElement('div');
+        element.className = 'suspension-alert';
+
+        const studentLabel = this.escapeHtml(payload.studentName || 'Aluno');
+        const reasonLabel = this.escapeHtml(payload.reason || 'Suspensão recomendada.');
+
+        element.innerHTML = `
+            <div class="suspension-alert__info">
+                <strong>🚨 ${studentLabel}</strong>
+                <p>${reasonLabel}</p>
+                <div class="suspension-alert__counts"></div>
+            </div>
+            <div class="suspension-alert__actions">
+                <button type="button" class="btn btn--primary btn--sm suspension-alert__generate">Gerar suspensão</button>
+                <button type="button" class="btn btn--outline btn--sm suspension-alert__dismiss">Agora não</button>
+            </div>
+        `;
+
+        const countsEl = element.querySelector('.suspension-alert__counts');
+        if (countsEl) {
+            countsEl.innerHTML = this.getSuspensionSummaryMarkup(payload.severitySummary);
+        }
+
+        const generateBtn = element.querySelector('.suspension-alert__generate');
+        if (generateBtn) {
+            generateBtn.addEventListener('click', () => {
+                this.openSuspensionModal(payload);
+            });
+        }
+
+        const dismissBtn = element.querySelector('.suspension-alert__dismiss');
+        if (dismissBtn) {
+            dismissBtn.addEventListener('click', () => {
+                this.removeSuspensionAlert(payload.trackerKey);
+            });
+        }
+
+        return element;
+    }
+
+    upsertSuspensionAlert(payload = {}) {
+        const container = document.getElementById('suspensionAlerts');
+        if (!container) {
+            return;
+        }
+
+        const key = payload.trackerKey || this.getStudentStorageKey(payload.studentId, payload.studentName);
+        if (!key) {
+            return;
+        }
+
+        const normalizedTracker = this.normalizeSuspensionTracker(payload.tracker || {}, {
+            studentId: payload.studentId,
+            studentName: payload.studentName,
+        });
+        normalizedTracker.leveCount = payload?.severitySummary?.leve || normalizedTracker.leveCount;
+        normalizedTracker.mediaCount = payload?.severitySummary?.media || normalizedTracker.mediaCount;
+        normalizedTracker.graveCount = payload?.severitySummary?.grave || normalizedTracker.graveCount;
+        const normalizedPayload = {
+            ...payload,
+            trackerKey: key,
+            tracker: normalizedTracker,
+        };
+
+        const existing = this.activeSuspensionAlerts.get(key);
+        if (existing && existing.element && existing.element.parentNode) {
+            existing.element.parentNode.removeChild(existing.element);
+        }
+
+        const element = this.buildSuspensionAlertElement(normalizedPayload);
+        container.appendChild(element);
+        container.classList.remove('hidden');
+        this.activeSuspensionAlerts.set(key, { element, data: normalizedPayload });
+    }
+
+    removeSuspensionAlert(key) {
+        if (!key) return;
+        const entry = this.activeSuspensionAlerts.get(key);
+        if (entry && entry.element && entry.element.parentNode) {
+            entry.element.parentNode.removeChild(entry.element);
+        }
+        this.activeSuspensionAlerts.delete(key);
+
+        if (this.activeSuspensionAlerts.size === 0) {
+            const container = document.getElementById('suspensionAlerts');
+            if (container) {
+                container.classList.add('hidden');
+            }
+        }
+    }
+
+    syncSuspensionAlerts(alerts = []) {
+        const keysToKeep = new Set();
+        alerts.forEach((payload) => {
+            const key = payload.trackerKey || this.getStudentStorageKey(payload.studentId, payload.studentName);
+            if (!key) {
+                return;
+            }
+            keysToKeep.add(key);
+            this.upsertSuspensionAlert({ ...payload, trackerKey: key });
+        });
+
+        const existingKeys = Array.from(this.activeSuspensionAlerts.keys());
+        existingKeys.forEach((key) => {
+            if (!keysToKeep.has(key)) {
+                this.removeSuspensionAlert(key);
+            }
+        });
     }
 
     buildSuspensionLetter({ studentName, className, reason, durationDays, summary, matchedCounts = null }) {
@@ -4341,6 +4568,8 @@ const loginEl = document.getElementById('login');
             } else {
                 this.showToast('Suspensão registrada, mas não foi possível gerar o PDF automaticamente.', 'warning');
             }
+
+            this.removeSuspensionAlert(key);
         } catch (error) {
             console.error('❌ Erro ao registrar suspensão:', error);
             this.showToast('Erro ao registrar a suspensão.', 'error');
